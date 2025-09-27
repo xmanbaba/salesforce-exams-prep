@@ -1,0 +1,15 @@
+Environment variables file
+.env.local
+
+Build artifacts
+build/
+
+Node dependencies
+node_modules/
+
+Mac system files
+.DS_Store
+
+Logs
+npm-debug.log*
+yarn-debug.log*
