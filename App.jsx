@@ -38,11 +38,40 @@ console.log("Gemini Config:", {
   modelName: modelName
 });
 
-// --- Initialization ---
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
+// --- Validate and Initialize Firebase ---
+const validateFirebaseConfig = (config) => {
+  const requiredFields = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
+  const missingFields = requiredFields.filter(field => !config[field]);
+  
+  if (missingFields.length > 0) {
+    console.error('Missing Firebase configuration fields:', missingFields);
+    return false;
+  }
+  return true;
+};
+
+// Only initialize Firebase if configuration is valid
+let app, db, auth, googleProvider;
+
+if (validateFirebaseConfig(firebaseConfig)) {
+  try {
+    app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    auth = getAuth(app);
+    googleProvider = new GoogleAuthProvider();
+    
+    // Configure Google provider
+    googleProvider.setCustomParameters({
+      prompt: 'select_account'
+    });
+    
+    console.log("✅ Firebase initialized successfully");
+  } catch (error) {
+    console.error("❌ Firebase initialization failed:", error);
+  }
+} else {
+  console.error("❌ Invalid Firebase configuration. Please check your environment variables.");
+}
 
 // --- Firestore Hooks/Functions ---
 
@@ -57,21 +86,25 @@ const useAuth = () => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
+        setIsAuthReady(true);
       } else {
-        // Attempt custom token sign-in if available, otherwise sign in anonymously
+        // Only attempt sign-in if no user is authenticated
         try {
           if (initialAuthToken) {
             await signInWithCustomToken(auth, initialAuthToken);
           } else {
+            // Only sign in anonymously if we don't have any user
             await signInAnonymously(auth);
           }
         } catch (error) {
           console.error("Firebase Auth Error:", error);
-          // Fallback if anonymous sign-in fails
-          setUser(null);
+          // Don't retry if it's an admin-restricted error
+          if (error.code !== 'auth/admin-restricted-operation') {
+            setUser(null);
+          }
+          setIsAuthReady(true);
         }
       }
-      setIsAuthReady(true);
     });
     return () => unsubscribe();
   }, []);
@@ -81,6 +114,10 @@ const useAuth = () => {
       await signInWithPopup(auth, googleProvider);
     } catch (error) {
       console.error("Google Sign-In Error:", error);
+      // Handle popup blocked errors gracefully
+      if (error.code === 'auth/popup-blocked') {
+        alert('Popup was blocked. Please allow popups for this site and try again.');
+      }
     }
   }, []);
 
@@ -549,18 +586,56 @@ const Results = ({ score, totalQuestions, questions, answers, onBackToDashboard,
 };
 
 // --- Auth Screen Component ---
-const AuthScreen = ({ signInWithGoogle }) => (
+const AuthScreen = ({ signInWithGoogle }) => {
+  const handleAnonymousSignIn = async () => {
+    if (!auth) {
+      alert('Firebase is not properly configured. Please check your environment variables.');
+      return;
+    }
+    
+    try {
+      await signInAnonymously(auth);
+    } catch (error) {
+      console.error("Anonymous Sign-In Error:", error);
+      if (error.code === 'auth/admin-restricted-operation') {
+        alert('Anonymous authentication is not enabled. Please use Google Sign-In or contact support.');
+      }
+    }
+  };
+
+  return (
     <Card className="max-w-md mx-auto text-center mt-20">
-        <h2 className="text-3xl font-bold text-gray-800 mb-4">Welcome to Exam Prep</h2>
-        <p className="text-gray-600 mb-6">Sign in to save your progress and access AI-generated exams.</p>
-        <Button onClick={signInWithGoogle} icon={SquareGanttChart} color="bg-red-600 hover:bg-red-700" className="w-full">
+      <h2 className="text-3xl font-bold text-gray-800 mb-4">Welcome to Exam Prep</h2>
+      <p className="text-gray-600 mb-6">Sign in to save your progress and access AI-generated exams.</p>
+      
+      {auth ? (
+        <>
+          <Button 
+            onClick={signInWithGoogle} 
+            icon={SquareGanttChart} 
+            color="bg-red-600 hover:bg-red-700" 
+            className="w-full"
+          >
             Sign In with Google
-        </Button>
-        <Button onClick={() => auth.currentUser ? null : signInAnonymously(auth)} icon={LogIn} color="bg-gray-500 hover:bg-gray-600" className="w-full mt-3">
+          </Button>
+          <Button 
+            onClick={handleAnonymousSignIn} 
+            icon={LogIn} 
+            color="bg-gray-500 hover:bg-gray-600" 
+            className="w-full mt-3"
+          >
             Continue Anonymously
-        </Button>
+          </Button>
+        </>
+      ) : (
+        <div className="p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+          <p className="font-bold">Configuration Error</p>
+          <p className="text-sm">Firebase is not properly configured. Please check your environment variables.</p>
+        </div>
+      )}
     </Card>
-);
+  );
+};
 
 // --- Main Application Component ---
 function App() {
