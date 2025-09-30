@@ -3,9 +3,9 @@
 
 import { EXAM_CONFIGS } from '../config/examConfig';
 
-// API Configuration
+// API Configuration - Using FREE Gemini 1.5 Flash Model (Stable)
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-const modelName = import.meta.env.VITE_GEMINI_MODEL_NAME || "gemini-1.5-pro-latest";
+const modelName = import.meta.env.VITE_GEMINI_MODEL_NAME || "gemini-1.5-flash";
 
 // Fisher-Yates shuffle algorithm
 export const shuffleArray = (array) => {
@@ -163,7 +163,7 @@ Format:
   };
 
   try {
-    // Use v1beta API endpoint which supports more models
+    // Use v1beta API endpoint - this works with all Gemini models
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     
     console.log(`📡 Calling Gemini API with model: ${modelName}...`);
