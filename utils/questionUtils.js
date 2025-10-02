@@ -66,9 +66,10 @@ DOMAIN COVERAGE (distribute questions across these domains):
    - Dashboard components
    - Data analysis basics
 
-QUESTION TYPE MIX:
-- Multiple Choice (single correct answer): ~60%
-- Scenario-Based Questions: ~40%
+QUESTION TYPE MIX (STRICT DISTRIBUTION):
+- Multiple Choice (exactly 1 correct answer, 3 distractors): 35% (${Math.round(count * 0.35)} questions)
+- True/False Questions: 15% (${Math.round(count * 0.15)} questions)
+- Scenario/Case Study Questions (with context and sub-questions): 50% (${Math.round(count * 0.50)} questions)
 
 DIFFICULTY DISTRIBUTION:
 - Easy (foundational concepts): 30%
@@ -122,8 +123,10 @@ Generate ${count} UNIQUE questions with focus on real-world AI scenarios.`
   return prompts[examName] || prompts['Salesforce Associate Certification'];
 };
 
-// Generate questions using Gemini API
-export const generateQuestions = async (examName, count) => {
+// Generate questions using Gemini API with retry logic
+export const generateQuestions = async (examName, count, retryCount = 0) => {
+  const MAX_RETRIES = 2;
+  
   console.log(`🤖 Generating ${count} questions for ${examName} using ${modelName}...`);
   
   if (!apiKey || apiKey === "") {
@@ -138,25 +141,42 @@ Generate exactly ${count} unique, non-repetitive practice exam questions for ${e
 
 CRITICAL: Each question must be completely different - no repeated concepts or scenarios.
 
-Return your response as a valid JSON array ONLY. No other text, no markdown, no explanation.
+Return your response as a valid JSON array ONLY. No other text, no markdown, no explanation, no code fences.
+
+CRITICAL JSON FORMATTING RULES:
+- Use double quotes for all strings
+- Escape any quotes inside strings with \"
+- Do not include trailing commas
+- Ensure proper bracket closure
+- No comments in JSON
 
 Format:
 [
   {
+    "questionType": "multiple-choice" or "true-false" or "scenario",
     "question": "question text here",
     "options": ["option 1 text", "option 2 text", "option 3 text", "option 4 text"],
-    "answer": "A",
+    "answer": "A" (or "True"/"False" for true-false questions),
     "explanation": "detailed explanation here"
   }
-]`;
+]
+
+For True/False questions, use this format:
+{
+  "questionType": "true-false",
+  "question": "statement to evaluate",
+  "options": ["True", "False"],
+  "answer": "True" or "False",
+  "explanation": "why this is true or false"
+}`;
 
   const payload = {
     contents: [{
       parts: [{ text: fullPrompt }]
     }],
     generationConfig: {
-      temperature: 0.9,
-      topP: 0.95,
+      temperature: 0.7,  // Reduced for more consistent JSON
+      topP: 0.9,
       topK: 40,
       maxOutputTokens: 8192
     }
@@ -190,23 +210,66 @@ Format:
 
     console.log("📄 Parsing JSON response...");
     
-    // Clean the response (remove markdown code blocks if present)
+    // Enhanced JSON cleaning and extraction
     let cleanedText = jsonText.trim();
-    cleanedText = cleanedText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
     
-    const questionsArray = JSON.parse(cleanedText);
+    // Remove markdown code fences
+    cleanedText = cleanedText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+    
+    // Extract JSON array between first [ and last ]
+    const firstBracket = cleanedText.indexOf('[');
+    const lastBracket = cleanedText.lastIndexOf(']');
+    
+    if (firstBracket === -1 || lastBracket === -1 || lastBracket <= firstBracket) {
+      console.error("❌ No valid JSON array found in response");
+      throw new Error("Response does not contain a valid JSON array");
+    }
+    
+    cleanedText = cleanedText.slice(firstBracket, lastBracket + 1);
+    
+    // Fix common JSON issues
+    cleanedText = cleanedText
+      .replace(/,(\s*[}\]])/g, '$1')  // Remove trailing commas
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '');  // Remove control characters
+    
+    let questionsArray;
+    try {
+      questionsArray = JSON.parse(cleanedText);
+    } catch (parseErr) {
+      console.error("❌ JSON Parse Error:", parseErr.message);
+      console.error("First 500 chars of cleaned text:", cleanedText.substring(0, 500));
+      console.error("Last 500 chars of cleaned text:", cleanedText.substring(cleanedText.length - 500));
+      throw new Error(`JSON parsing failed: ${parseErr.message}. The AI response may be malformed.`);
+    }
     
     if (!Array.isArray(questionsArray) || questionsArray.length === 0) {
       throw new Error("API returned invalid format.");
     }
 
-    // Clean up options
-    const cleanedQuestions = questionsArray.map(q => ({
-      ...q,
-      options: q.options.map(option => 
-        option.replace(/^[A-D]\.\s*/, '').trim()
-      )
-    }));
+    // Normalize question format and clean options
+    const cleanedQuestions = questionsArray.map((q, idx) => {
+      // Handle both array and non-array options
+      let opts = [];
+      
+      if (q.questionType === 'true-false') {
+        opts = ['True', 'False'];
+      } else if (Array.isArray(q.options)) {
+        opts = q.options.map(option =>
+          option ? option.replace(/^[A-D]\.\s*/, '').trim() : ''
+        );
+      } else {
+        console.warn(`Question ${idx + 1} has invalid options format, using defaults`);
+        opts = ['Option A', 'Option B', 'Option C', 'Option D'];
+      }
+      
+      return {
+        questionType: q.questionType || 'multiple-choice',
+        question: q.question || '',
+        options: opts,
+        answer: q.answer || 'A',
+        explanation: q.explanation || ''
+      };
+    });
 
     console.log(`✅ Successfully generated ${cleanedQuestions.length} unique AI questions`);
 
@@ -214,6 +277,14 @@ Format:
 
   } catch (e) {
     console.error("❌ AI Generation Error:", e);
+    
+    // Retry logic for transient failures
+    if (retryCount < MAX_RETRIES && e.message.includes('JSON')) {
+      console.log(`🔄 Retrying... Attempt ${retryCount + 1} of ${MAX_RETRIES}`);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+      return generateQuestions(examName, count, retryCount + 1);
+    }
+    
     throw new Error(`Failed to generate questions: ${e.message}`);
   }
 };
