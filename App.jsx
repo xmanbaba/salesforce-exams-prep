@@ -5,7 +5,7 @@ import { Loader2, Zap } from 'lucide-react';
 import { useAuth } from './hooks/useAuth';
 import { useFirestore } from './hooks/useFirestore';
 
-// Import utilities (fixed casing to match folder name)
+// Import utilities
 import { generateQuestions, randomizeQuestions } from './utils/questionUtils';
 import { EXAM_CONFIGS } from './config/examConfig';
 
@@ -30,6 +30,7 @@ function App() {
   const [examStartTime, setExamStartTime] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [reviewMode, setReviewMode] = useState(null); // For reviewing past attempts
 
   // Handle starting a quiz (regular or retake)
   const handleStartQuiz = useCallback((examName, newQuestions, isRetake = false) => {
@@ -43,6 +44,7 @@ function App() {
     setScore(0);
     setExamStartTime(Date.now());
     setCurrentPage('quiz');
+    setReviewMode(null); // Clear review mode when starting new quiz
   }, []);
 
   // Handle generating questions from AI
@@ -101,8 +103,21 @@ function App() {
   // Handle quiz submission
   const handleSubmitQuiz = useCallback(async () => {
     const finalScore = questions.reduce((acc, q, index) => {
-      if (answers[index] === q.answer) {
-        return acc + 1;
+      const userAnswer = answers[index];
+      const correctAnswer = q.answer;
+      
+      // Handle multiple-select questions (comma-separated answers)
+      if (q.questionType === 'multiple-select') {
+        const userAnswers = (userAnswer || '').split(',').filter(Boolean).sort().join(',');
+        const correctAnswers = correctAnswer.split(',').filter(Boolean).sort().join(',');
+        if (userAnswers === correctAnswers) {
+          return acc + 1;
+        }
+      } else {
+        // Single answer questions
+        if (userAnswer === correctAnswer) {
+          return acc + 1;
+        }
       }
       return acc;
     }, 0);
@@ -112,8 +127,9 @@ function App() {
 
     if (user && addQuizAttempt) {
       try {
-        await addQuizAttempt(exam, finalScore, questions.length, timeSpent);
-        console.log('Quiz results saved successfully');
+        // Save with full question and answer data for review capability
+        await addQuizAttempt(exam, finalScore, questions.length, timeSpent, questions, answers);
+        console.log('Quiz results saved successfully with full data');
       } catch (error) {
         console.error('Failed to save quiz results:', error);
       }
@@ -131,6 +147,28 @@ function App() {
   // Handle answer selection
   const handleAnswerChange = useCallback((qIndex, option) => {
     setAnswers(prev => ({ ...prev, [qIndex]: option }));
+  }, []);
+
+  // Handle reviewing past exam attempts
+  const handleReviewPastExam = useCallback((attempt) => {
+    if (!attempt.questions || !attempt.userAnswers) {
+      alert('This exam attempt does not have detailed data available for review.');
+      return;
+    }
+    
+    setReviewMode(attempt);
+    setExam(attempt.examName);
+    setQuestions(attempt.questions);
+    setAnswers(attempt.userAnswers);
+    setScore(attempt.score);
+    setExamStartTime(null); // No timer in review mode
+    setCurrentPage('results'); // Go directly to results view
+  }, []);
+
+  // Handle back to dashboard and clear review mode
+  const handleBackToDashboard = useCallback(() => {
+    setReviewMode(null);
+    setCurrentPage('selection');
   }, []);
 
   // Render pages
@@ -164,6 +202,7 @@ function App() {
             error={error}
             generateQuestions={handleGenerateQuestions}
             onNewQuiz={handleNewQuiz}
+            onReviewPastExam={handleReviewPastExam}
           />
         );
 
@@ -186,10 +225,11 @@ function App() {
             totalQuestions={questions.length}
             questions={questions}
             answers={answers}
-            onBackToDashboard={() => setCurrentPage('selection')}
+            onBackToDashboard={handleBackToDashboard}
             onRestart={handleRestartQuiz}
             examName={exam}
-            timeSpent={Math.floor((Date.now() - examStartTime) / 1000)}
+            timeSpent={reviewMode ? reviewMode.timeSpent : Math.floor((Date.now() - examStartTime) / 1000)}
+            isReviewMode={!!reviewMode}
           />
         );
 
@@ -215,7 +255,10 @@ function App() {
 
             {currentPage !== 'selection' && (
               <button
-                onClick={() => setCurrentPage('selection')}
+                onClick={() => {
+                  setReviewMode(null);
+                  setCurrentPage('selection');
+                }}
                 className="px-3 py-1.5 md:px-4 md:py-2 rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition text-sm"
               >
                 Dashboard
@@ -239,7 +282,7 @@ function App() {
 
       {/* Footer */}
       <footer className="mt-8 text-center text-gray-500 text-xs md:text-sm">
-        <p>© 2025 Salesforce Certification Prep - AI-Powered Learning Platform</p>
+        <p>&copy; 2025 Salesforce Certification Prep - AI-Powered Learning Platform</p>
       </footer>
     </div>
   );

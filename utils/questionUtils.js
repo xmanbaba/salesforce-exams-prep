@@ -7,6 +7,9 @@ import { EXAM_CONFIGS } from '../config/examConfig';
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 const modelName = import.meta.env.VITE_GEMINI_MODEL_NAME || "gemini-1.5-flash";
 
+// NOTE: gemini-2.5-flash is being retired October 30, 2025
+// Using gemini-1.5-flash which is stable and not deprecated
+
 // Fisher-Yates shuffle algorithm
 export const shuffleArray = (array) => {
   const shuffled = [...array];
@@ -67,9 +70,10 @@ DOMAIN COVERAGE (distribute questions across these domains):
    - Data analysis basics
 
 QUESTION TYPE MIX (STRICT DISTRIBUTION):
-- Multiple Choice (exactly 1 correct answer, 3 distractors): 35% (${Math.round(count * 0.35)} questions)
-- True/False Questions: 15% (${Math.round(count * 0.15)} questions)
-- Scenario/Case Study Questions (with context and sub-questions): 50% (${Math.round(count * 0.50)} questions)
+- Multiple Choice (exactly 1 correct answer, 3 distractors): 30% (${Math.round(count * 0.30)} questions)
+- Multiple Select (2-3 correct answers from 4-5 options): 20% (${Math.round(count * 0.20)} questions)
+- True/False Questions: 10% (${Math.round(count * 0.10)} questions)
+- Scenario/Case Study Questions (with context and sub-questions): 40% (${Math.round(count * 0.40)} questions)
 
 DIFFICULTY DISTRIBUTION:
 - Easy (foundational concepts): 30%
@@ -168,7 +172,14 @@ For True/False questions, use this format:
   "options": ["True", "False"],
   "answer": "True" or "False",
   "explanation": "why this is true or false"
-}`;
+}
+
+CRITICAL TRUE/FALSE GUIDELINES:
+- Statements must be clear and unambiguous
+- Avoid double negatives or confusing phrasing
+- Ensure the explanation validates the correct answer without contradictions
+- Use proper Salesforce terminology (e.g., "standard objects" not "custom standard objects")
+- Test your logic: if answer is True, explanation should clearly explain why it's true`;
 
   const payload = {
     contents: [{
@@ -250,9 +261,17 @@ For True/False questions, use this format:
     const cleanedQuestions = questionsArray.map((q, idx) => {
       // Handle both array and non-array options
       let opts = [];
+      let normalizedAnswer = q.answer || 'A';
       
       if (q.questionType === 'true-false') {
         opts = ['True', 'False'];
+        // CRITICAL FIX: Normalize True/False answers to option letters
+        // This ensures scoring works correctly
+        if (normalizedAnswer === 'True' || normalizedAnswer === 'true') {
+          normalizedAnswer = 'A';  // True is always option A
+        } else if (normalizedAnswer === 'False' || normalizedAnswer === 'false') {
+          normalizedAnswer = 'B';  // False is always option B
+        }
       } else if (Array.isArray(q.options)) {
         opts = q.options.map(option =>
           option ? option.replace(/^[A-D]\.\s*/, '').trim() : ''
@@ -266,12 +285,29 @@ For True/False questions, use this format:
         questionType: q.questionType || 'multiple-choice',
         question: q.question || '',
         options: opts,
-        answer: q.answer || 'A',
-        explanation: q.explanation || ''
+        answer: normalizedAnswer,  // Now always A/B/C/D format
+        explanation: q.explanation || '',
+        originalAnswer: q.answer  // Keep original for reference
       };
     });
 
     console.log(`✅ Successfully generated ${cleanedQuestions.length} unique AI questions`);
+    
+    // CRITICAL: Enforce exact question count
+    if (cleanedQuestions.length !== count) {
+      console.warn(`⚠️ Question count mismatch: Expected ${count}, got ${cleanedQuestions.length}`);
+      
+      if (cleanedQuestions.length > count) {
+        // Trim excess questions
+        console.log(`✂️ Trimming ${cleanedQuestions.length - count} excess questions`);
+        return cleanedQuestions.slice(0, count);
+      } else if (cleanedQuestions.length < count && retryCount < MAX_RETRIES) {
+        // Too few questions - retry
+        console.log(`🔄 Too few questions. Retrying to get exactly ${count} questions...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return generateQuestions(examName, count, retryCount + 1);
+      }
+    }
 
     return cleanedQuestions;
 

@@ -1,26 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Global Deny/Read-Only: By default, deny access to everything unless specifically allowed below.
-    // We remove the overly permissive 'match /{document=**}' rule from before.
-    match /{document=**} {
-      allow read, write: if false;
-    }
-    
-    // --- User Private Data Rules ---
-    // Rule for exam attempts: Only the user who owns the data can read/write it.
-    // Path: /artifacts/{appId}/users/{userId}/examAttempts/{attemptId}
-    match /artifacts/{appId}/users/{userId}/examAttempts/{attemptId} {
-      allow read, create: if request.auth.uid == userId;
-      // Allow update/delete only if the incoming data doesn't modify the core ownership fields
-      allow update, delete: if request.auth.uid == userId;
-    }
-
-    // Rule for dynamic questions: Only the user who owns the data can read/write it.
-    // Path: /artifacts/{appId}/users/{userId}/questions/{questionId}
-    match /artifacts/{appId}/users/{userId}/questions/{questionId} {
-      allow read, write: if request.auth.uid == userId;
+    match /artifacts/{appId}/users/{userId}/{document=**} {
+      allow read, create, update, delete: if request.auth.uid == userId;
     }
   }
 }

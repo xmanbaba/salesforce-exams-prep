@@ -1,23 +1,27 @@
 // config/examConfig.js
 // Centralized exam configuration for all certification types
+// Updated with official Salesforce certification specifications
 
 export const EXAM_CONFIGS = {
-  'Salesforce Associate Certification': {
-    description: 'Platform Foundations - 40 questions, 62% pass mark',
-    questionCount: 40,
+  'Salesforce Certified Platform Foundations': {
+    description: 'Platform Foundations - 60 questions (+ 5 non-scored), 62% pass mark',
+    questionCount: 60,  // 60 scored + 5 non-scored (system generates 60 for scoring)
     passMark: 62,
-    timeLimit: 90, // minutes
+    timeLimit: 70, // minutes
+    officialName: 'Salesforce Certified Associate'
   },
-  'Salesforce Administrator Certification': {
-    description: 'Admin Certification - 60 questions, 70% pass mark',
-    questionCount: 60,
-    passMark: 70,
-    timeLimit: 120, // minutes
+  'Salesforce Certified Platform Administrator': {
+    description: 'Platform Administrator - 60 questions (+ 5 non-scored), 65% pass mark',
+    questionCount: 60,  // 60 scored + 5 non-scored (system generates 60 for scoring)
+    passMark: 65,
+    timeLimit: 105, // minutes
+    officialName: 'Salesforce Certified Administrator'
   },
-  'Salesforce AI Agentforce': {
-    description: 'AI and Agentforce - 40 questions, 70% pass mark',
-    questionCount: 40,
-    passMark: 70,
-    timeLimit: 90, // minutes
+  'Salesforce Certified Agentforce Specialist': {
+    description: 'Agentforce Specialist - 60 questions (+ 5 non-scored), 73% pass mark',
+    questionCount: 60,  // 60 scored + 5 non-scored (system generates 60 for scoring)
+    passMark: 73,
+    timeLimit: 105, // minutes
+    officialName: 'Salesforce AI Agentforce Specialist'
   }
 };
