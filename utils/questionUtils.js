@@ -1,14 +1,15 @@
 // utils/questionUtils.js
-// Question generation with correct Gemini API model names
+// Complete version with batch processing for reliable question generation
 
 import { EXAM_CONFIGS } from '../config/examConfig';
 
-// API Configuration - Using FREE Gemini 1.5 Flash Model (Stable)
+// API Configuration
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-const modelName = import.meta.env.VITE_GEMINI_MODEL_NAME || "gemini-1.5-flash";
+// IMPORTANT: Use the model that YOUR API key supports
+const modelName = import.meta.env.VITE_GEMINI_MODEL_NAME || "gemini-2.5-flash";
 
-// NOTE: gemini-2.5-flash is being retired October 30, 2025
-// Using gemini-1.5-flash which is stable and not deprecated
+// CRITICAL: Gemini struggles with 60 questions at once - use batch processing
+const MAX_BATCH_SIZE = 15; // Reduced from 20 to 15 for better reliability
 
 // Fisher-Yates shuffle algorithm
 export const shuffleArray = (array) => {
@@ -40,60 +41,49 @@ export const randomizeQuestions = (questions) => {
 // Get certification-specific prompts
 const getCertificationPrompt = (examName, count) => {
   const prompts = {
-    'Salesforce Associate Certification': `You are a highly experienced Salesforce Administrator, Architect, and certification expert.
+    'Salesforce Certified Platform Foundations': `You are a Salesforce certification expert creating practice exam questions.
 
 EXAM SPECIFICATIONS:
-- Certification: Salesforce Certified Associate (Platform Foundations)
+- Certification: Salesforce Certified Platform Foundations (Associate)
 - Total Questions: ${count} questions
 - Duration: 70 minutes
 - Passing Score: 62%
 
-DOMAIN COVERAGE (distribute questions across these domains):
-1. Salesforce Ecosystem (~32% of questions = ${Math.round(count * 0.32)} questions)
+DOMAIN COVERAGE (distribute questions proportionally):
+1. Salesforce Ecosystem (~32% = ${Math.round(count * 0.32)} questions)
    - Understanding Salesforce capabilities and products
    - Salesforce terminology and concepts
    - AppExchange and third-party integrations
 
-2. Navigation (~28% of questions = ${Math.round(count * 0.28)} questions)
+2. Navigation (~28% = ${Math.round(count * 0.28)} questions)
    - User interface navigation
    - Finding and using features
    - Working with records and data
 
-3. Data Model (~25% of questions = ${Math.round(count * 0.25)} questions)
+3. Data Model (~25% = ${Math.round(count * 0.25)} questions)
    - Standard and custom objects
    - Fields and field types
    - Relationships between objects
 
-4. Reports & Dashboards (~15% of questions = ${Math.round(count * 0.15)} questions)
+4. Reports & Dashboards (~15% = ${Math.round(count * 0.15)} questions)
    - Creating and customizing reports
    - Dashboard components
    - Data analysis basics
 
-QUESTION TYPE MIX (STRICT DISTRIBUTION):
-- Multiple Choice (exactly 1 correct answer, 3 distractors): 30% (${Math.round(count * 0.30)} questions)
-- Multiple Select (2-3 correct answers from 4-5 options): 20% (${Math.round(count * 0.20)} questions)
-- True/False Questions: 10% (${Math.round(count * 0.10)} questions)
-- Scenario/Case Study Questions (with context and sub-questions): 40% (${Math.round(count * 0.40)} questions)
-
-DIFFICULTY DISTRIBUTION:
+QUESTION DIFFICULTY:
 - Easy (foundational concepts): 30%
 - Medium (application of knowledge): 50%
 - Hard (complex scenarios): 20%
 
-CRITICAL REQUIREMENTS:
-- Generate ${count} UNIQUE questions - NO repetition
-- Each question must test different concepts
-- Include realistic business scenarios
-- Provide detailed explanations (3-4 sentences minimum)
-- Ensure distractors are plausible but clearly incorrect`,
+CRITICAL: Generate ${count} UNIQUE questions with NO repetition.`,
 
-    'Salesforce Administrator Certification': `You are a highly experienced Salesforce Administrator, Architect, and certification expert.
+    'Salesforce Certified Platform Administrator': `You are a Salesforce Administrator certification expert.
 
 EXAM SPECIFICATIONS:
-- Certification: Salesforce Certified Administrator
+- Certification: Salesforce Certified Platform Administrator
 - Total Questions: ${count} questions
 - Duration: 105 minutes
-- Passing Score: 70%
+- Passing Score: 65%
 
 DOMAIN COVERAGE:
 1. Configuration and Setup (~20%)
@@ -104,15 +94,15 @@ DOMAIN COVERAGE:
 6. Data and Analytics Management (~14%)
 7. Workflow/Process Automation (~16%)
 
-Generate ${count} UNIQUE questions covering all domains with realistic scenarios.`,
+CRITICAL: Generate ${count} UNIQUE questions covering all domains with realistic scenarios.`,
 
-    'Salesforce AI Agentforce': `You are a highly experienced Salesforce AI Specialist and Agentforce expert.
+    'Salesforce Certified Agentforce Specialist': `You are a Salesforce AI and Agentforce certification expert.
 
 EXAM SPECIFICATIONS:
-- Certification: Salesforce Certified AI Specialist (Agentforce)
+- Certification: Salesforce Certified Agentforce Specialist
 - Total Questions: ${count} questions
 - Duration: 105 minutes
-- Passing Score: 70%
+- Passing Score: 73%
 
 DOMAIN COVERAGE:
 1. Prompt Engineering (~30%)
@@ -121,206 +111,368 @@ DOMAIN COVERAGE:
 4. Agentforce & Service Cloud (~10%)
 5. Agentforce & Sales Cloud (~10%)
 
-Generate ${count} UNIQUE questions with focus on real-world AI scenarios.`
+CRITICAL: Generate ${count} UNIQUE questions with focus on real-world AI scenarios.`
   };
 
-  return prompts[examName] || prompts['Salesforce Associate Certification'];
+  return prompts[examName] || prompts['Salesforce Certified Platform Foundations'];
 };
 
-// Generate questions using Gemini API with retry logic
-export const generateQuestions = async (examName, count, retryCount = 0) => {
-  const MAX_RETRIES = 2;
+// Advanced JSON repair function
+const repairJSON = (text) => {
+  console.log("🔧 Attempting to repair JSON...");
   
-  console.log(`🤖 Generating ${count} questions for ${examName} using ${modelName}...`);
+  let repaired = text;
+  
+  // Fix missing commas between objects
+  repaired = repaired.replace(/\}(\s+)\{/g, '},$1{');
+  
+  // Fix missing commas between properties
+  repaired = repaired.replace(/\}(\s+)"([a-zA-Z])/g, '},$1"$2');
+  
+  // Fix missing commas after closing arrays before next property
+  repaired = repaired.replace(/\](\s+)"([a-zA-Z])/g, '],$1"$2');
+  
+  // Fix missing commas after values before next property
+  repaired = repaired.replace(/"(\s+)"([a-zA-Z]+)":/g, '",$1"$2":');
+  
+  // Fix missing commas in arrays
+  repaired = repaired.replace(/"(\s+)"/g, '",$1"');
+  
+  // Remove duplicate commas
+  repaired = repaired.replace(/,+/g, ',');
+  
+  // Fix comma before closing brackets
+  repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
+  
+  return repaired;
+};
+
+// Enhanced JSON cleaning and extraction
+const cleanAndExtractJSON = (text) => {
+  if (!text) {
+    throw new Error("Empty response from API");
+  }
+
+  console.log("🧹 Cleaning JSON response...");
+  
+  // Remove markdown code fences
+  let cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  
+  // Find the JSON array boundaries
+  const firstBracket = cleaned.indexOf('[');
+  const lastBracket = cleaned.lastIndexOf(']');
+  
+  if (firstBracket === -1 || lastBracket === -1 || lastBracket <= firstBracket) {
+    console.error("❌ No valid JSON array found");
+    throw new Error("Response does not contain a valid JSON array");
+  }
+  
+  // Extract only the array
+  cleaned = cleaned.slice(firstBracket, lastBracket + 1);
+  
+  // Apply JSON repairs
+  cleaned = repairJSON(cleaned);
+  
+  // Remove control characters
+  cleaned = cleaned.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+  
+  // Fix escaped quotes issues
+  cleaned = cleaned
+    .replace(/\\\\"/g, '"')  // Fix double-escaped quotes
+    .replace(/\\'/g, "'");   // Fix escaped single quotes
+  
+  // Final check: ensure balanced brackets
+  const openBrackets = (cleaned.match(/\{/g) || []).length;
+  const closeBrackets = (cleaned.match(/\}/g) || []).length;
+  
+  if (openBrackets !== closeBrackets) {
+    console.warn(`⚠️ Unbalanced brackets detected: ${openBrackets} open, ${closeBrackets} close`);
+    
+    // Try to fix by removing incomplete last object
+    if (openBrackets > closeBrackets) {
+      const lastCompleteObject = cleaned.lastIndexOf('},');
+      if (lastCompleteObject > 0) {
+        cleaned = cleaned.substring(0, lastCompleteObject + 1) + ']';
+        console.log("🔧 Removed incomplete last object");
+      }
+    }
+  }
+
+  return cleaned;
+};
+
+// Normalize question format
+const normalizeQuestion = (q, index) => {
+  if (!q.question || !q.options || !q.answer || !q.explanation) {
+    console.warn(`⚠️ Question ${index + 1} has missing required fields, skipping`);
+    return null;
+  }
+
+  let opts = [];
+  let normalizedAnswer = q.answer.trim().toUpperCase();
+
+  // Handle true/false questions
+  if (q.questionType === 'true-false') {
+    opts = ['True', 'False'];
+    
+    // Normalize answer to A/B format
+    const answerLower = normalizedAnswer.toLowerCase();
+    if (answerLower === 'true' || answerLower === 'a') {
+      normalizedAnswer = 'A';
+    } else if (answerLower === 'false' || answerLower === 'b') {
+      normalizedAnswer = 'B';
+    }
+  } 
+  // Handle regular multiple choice
+  else if (Array.isArray(q.options)) {
+    // Clean options - remove letter prefixes and trim
+    opts = q.options.map(option => {
+      if (typeof option !== 'string') return '';
+      return option.replace(/^[A-D][\.\)]\s*/i, '').trim();
+    });
+    
+    // Filter out empty options
+    opts = opts.filter(opt => opt.length > 0);
+    
+    // Ensure we have at least 2 options
+    if (opts.length < 2) {
+      console.warn(`⚠️ Question ${index + 1} has only ${opts.length} options, skipping`);
+      return null;
+    }
+    
+    // Pad to 4 options if needed for multiple choice
+    while (opts.length < 4 && q.questionType === 'multiple-choice') {
+      opts.push(`Option ${String.fromCharCode(65 + opts.length)}`);
+    }
+  } else {
+    console.warn(`⚠️ Question ${index + 1} has invalid options format`);
+    return null;
+  }
+
+  // Normalize answer format
+  if (q.questionType === 'true-false') {
+    if (!['A', 'B'].includes(normalizedAnswer)) {
+      normalizedAnswer = 'A'; // Default to True
+    }
+  } else {
+    // For multiple choice, ensure answer is valid
+    const validAnswers = ['A', 'B', 'C', 'D'].slice(0, opts.length);
+    if (!validAnswers.includes(normalizedAnswer)) {
+      console.warn(`⚠️ Question ${index + 1} has invalid answer "${normalizedAnswer}", defaulting to A`);
+      normalizedAnswer = 'A';
+    }
+  }
+
+  return {
+    questionType: q.questionType || 'multiple-choice',
+    question: q.question.trim(),
+    options: opts,
+    answer: normalizedAnswer,
+    explanation: q.explanation.trim(),
+    originalAnswer: q.answer
+  };
+};
+
+// Generate a single batch of questions
+const generateBatch = async (examName, batchSize, batchNumber) => {
+  console.log(`📦 Generating batch ${batchNumber}: ${batchSize} questions...`);
+  
+  const systemPrompt = getCertificationPrompt(examName, batchSize);
+  
+  const fullPrompt = `${systemPrompt}
+
+CRITICAL: Return ONLY valid JSON array. No markdown, no explanation, no code fences.
+
+FORMAT (exactly ${batchSize} unique questions):
+[
+  {
+    "questionType": "multiple-choice",
+    "question": "Question text here?",
+    "options": [
+      "First option text without letter prefix",
+      "Second option text without letter prefix",
+      "Third option text without letter prefix",
+      "Fourth option text without letter prefix"
+    ],
+    "answer": "A",
+    "explanation": "Detailed explanation text."
+  }
+]
+
+STRICT RULES:
+1. NO letter prefixes in options (no "A.", "B.", etc. - just plain text)
+2. Answer must be single letter: "A", "B", "C", or "D"
+3. All strings must be in double quotes
+4. Use commas between all array items and object properties
+5. NO trailing commas before ] or }
+6. Escape any quotes inside strings with backslash
+7. Each question must have ALL required fields
+
+For True/False questions use this format:
+{
+  "questionType": "true-false",
+  "question": "Statement to evaluate?",
+  "options": ["True", "False"],
+  "answer": "True",
+  "explanation": "Explanation of why this is true or false."
+}
+
+IMPORTANT: Generate exactly ${batchSize} complete, unique questions. Each question must be different.`;
+
+  const payload = {
+    contents: [{ parts: [{ text: fullPrompt }] }],
+    generationConfig: {
+      temperature: 0.5,  // Lower temperature for more consistent JSON
+      topP: 0.85,
+      topK: 30,
+      maxOutputTokens: 3072,  // Reduced token limit for smaller, more reliable responses
+      candidateCount: 1
+    }
+  };
+
+  // Use v1beta API - this is the correct endpoint
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+  
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`❌ Batch ${batchNumber} API error:`, response.status);
+    throw new Error(`API error (${response.status}): ${errorText.substring(0, 200)}`);
+  }
+
+  const result = await response.json();
+  const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!jsonText) {
+    throw new Error("Empty API response");
+  }
+
+  const cleaned = cleanAndExtractJSON(jsonText);
+  const parsed = JSON.parse(cleaned);
+  
+  if (!Array.isArray(parsed)) {
+    throw new Error("Invalid response format - expected array");
+  }
+
+  const normalized = parsed.map((q, i) => normalizeQuestion(q, i)).filter(q => q !== null);
+  
+  console.log(`✅ Batch ${batchNumber}: Generated ${normalized.length}/${batchSize} valid questions`);
+  
+  return normalized;
+};
+
+// Main generation function with batch processing
+export const generateQuestions = async (examName, totalCount, retryCount = 0) => {
+  const MAX_RETRIES = 3;
+  
+  console.log(`🤖 Generating ${totalCount} questions for ${examName} using ${modelName}...`);
+  console.log(`📊 Using batch processing with max ${MAX_BATCH_SIZE} questions per batch`);
   
   if (!apiKey || apiKey === "") {
     throw new Error("Gemini API key is not configured. Please add VITE_GEMINI_API_KEY to your .env file.");
   }
 
-  const systemPrompt = getCertificationPrompt(examName, count);
-  
-  const fullPrompt = `${systemPrompt}
-
-Generate exactly ${count} unique, non-repetitive practice exam questions for ${examName}.
-
-CRITICAL: Each question must be completely different - no repeated concepts or scenarios.
-
-Return your response as a valid JSON array ONLY. No other text, no markdown, no explanation, no code fences.
-
-CRITICAL JSON FORMATTING RULES:
-- Use double quotes for all strings
-- Escape any quotes inside strings with \"
-- Do not include trailing commas
-- Ensure proper bracket closure
-- No comments in JSON
-
-Format:
-[
-  {
-    "questionType": "multiple-choice" or "true-false" or "scenario",
-    "question": "question text here",
-    "options": ["option 1 text", "option 2 text", "option 3 text", "option 4 text"],
-    "answer": "A" (or "True"/"False" for true-false questions),
-    "explanation": "detailed explanation here"
-  }
-]
-
-For True/False questions, use this format:
-{
-  "questionType": "true-false",
-  "question": "statement to evaluate",
-  "options": ["True", "False"],
-  "answer": "True" or "False",
-  "explanation": "why this is true or false"
-}
-
-CRITICAL TRUE/FALSE GUIDELINES:
-- Statements must be clear and unambiguous
-- Avoid double negatives or confusing phrasing
-- Ensure the explanation validates the correct answer without contradictions
-- Use proper Salesforce terminology (e.g., "standard objects" not "custom standard objects")
-- Test your logic: if answer is True, explanation should clearly explain why it's true`;
-
-  const payload = {
-    contents: [{
-      parts: [{ text: fullPrompt }]
-    }],
-    generationConfig: {
-      temperature: 0.7,  // Reduced for more consistent JSON
-      topP: 0.9,
-      topK: 40,
-      maxOutputTokens: 8192
-    }
-  };
-
   try {
-    // Use v1beta API endpoint - this works with all Gemini models
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    let allQuestions = [];
     
-    console.log(`📡 Calling Gemini API with model: ${modelName}...`);
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("❌ API Response Error:", response.status, errorText);
-      throw new Error(`Gemini API error (${response.status}). Check your API key and try again.`);
-    }
-
-    const result = await response.json();
-    console.log("📦 API Response received");
-
-    const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!jsonText) {
-      throw new Error("Gemini API returned empty response.");
-    }
-
-    console.log("📄 Parsing JSON response...");
+    // Calculate number of batches needed
+    const numBatches = Math.ceil(totalCount / MAX_BATCH_SIZE);
     
-    // Enhanced JSON cleaning and extraction
-    let cleanedText = jsonText.trim();
+    console.log(`📊 Will generate ${numBatches} batches to reach ${totalCount} questions`);
     
-    // Remove markdown code fences
-    cleanedText = cleanedText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
-    
-    // Extract JSON array between first [ and last ]
-    const firstBracket = cleanedText.indexOf('[');
-    const lastBracket = cleanedText.lastIndexOf(']');
-    
-    if (firstBracket === -1 || lastBracket === -1 || lastBracket <= firstBracket) {
-      console.error("❌ No valid JSON array found in response");
-      throw new Error("Response does not contain a valid JSON array");
-    }
-    
-    cleanedText = cleanedText.slice(firstBracket, lastBracket + 1);
-    
-    // Fix common JSON issues
-    cleanedText = cleanedText
-      .replace(/,(\s*[}\]])/g, '$1')  // Remove trailing commas
-      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '');  // Remove control characters
-    
-    let questionsArray;
-    try {
-      questionsArray = JSON.parse(cleanedText);
-    } catch (parseErr) {
-      console.error("❌ JSON Parse Error:", parseErr.message);
-      console.error("First 500 chars of cleaned text:", cleanedText.substring(0, 500));
-      console.error("Last 500 chars of cleaned text:", cleanedText.substring(cleanedText.length - 500));
-      throw new Error(`JSON parsing failed: ${parseErr.message}. The AI response may be malformed.`);
-    }
-    
-    if (!Array.isArray(questionsArray) || questionsArray.length === 0) {
-      throw new Error("API returned invalid format.");
-    }
-
-    // Normalize question format and clean options
-    const cleanedQuestions = questionsArray.map((q, idx) => {
-      // Handle both array and non-array options
-      let opts = [];
-      let normalizedAnswer = q.answer || 'A';
+    // Generate questions in batches
+    for (let i = 0; i < numBatches; i++) {
+      const remainingQuestions = totalCount - allQuestions.length;
+      const batchSize = Math.min(MAX_BATCH_SIZE, remainingQuestions);
       
-      if (q.questionType === 'true-false') {
-        opts = ['True', 'False'];
-        // CRITICAL FIX: Normalize True/False answers to option letters
-        // This ensures scoring works correctly
-        if (normalizedAnswer === 'True' || normalizedAnswer === 'true') {
-          normalizedAnswer = 'A';  // True is always option A
-        } else if (normalizedAnswer === 'False' || normalizedAnswer === 'false') {
-          normalizedAnswer = 'B';  // False is always option B
+      try {
+        const batchQuestions = await generateBatch(examName, batchSize, i + 1);
+        allQuestions = allQuestions.concat(batchQuestions);
+        
+        console.log(`📈 Progress: ${allQuestions.length}/${totalCount} questions generated`);
+        
+        // Small delay between batches to avoid rate limits
+        if (i < numBatches - 1 && allQuestions.length < totalCount) {
+          console.log('⏳ Waiting 2 seconds before next batch...');
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
-      } else if (Array.isArray(q.options)) {
-        opts = q.options.map(option =>
-          option ? option.replace(/^[A-D]\.\s*/, '').trim() : ''
-        );
-      } else {
-        console.warn(`Question ${idx + 1} has invalid options format, using defaults`);
-        opts = ['Option A', 'Option B', 'Option C', 'Option D'];
+        
+      } catch (batchError) {
+        console.error(`❌ Batch ${i + 1} failed:`, batchError.message);
+        
+        // CRITICAL: Stop infinite retry on 404 errors (model not found)
+        if (batchError.message.includes('404') || batchError.message.includes('not found')) {
+          console.error('💥 CRITICAL: Model not found. Check your .env file has the correct model name.');
+          throw new Error(`Model "${modelName}" not found. Please check VITE_GEMINI_MODEL_NAME in your .env file. Your API key may only support specific models like gemini-2.5-flash or gemini-pro.`);
+        }
+        
+        // Retry this specific batch once (only for non-404 errors)
+        if (retryCount === 0) {
+          console.log(`🔄 Retrying batch ${i + 1}...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          i--; // Retry this batch
+          continue;
+        } else {
+          console.warn(`⚠️ Skipping failed batch ${i + 1}, continuing with next batch`);
+        }
       }
       
-      return {
-        questionType: q.questionType || 'multiple-choice',
-        question: q.question || '',
-        options: opts,
-        answer: normalizedAnswer,  // Now always A/B/C/D format
-        explanation: q.explanation || '',
-        originalAnswer: q.answer  // Keep original for reference
-      };
-    });
-
-    console.log(`✅ Successfully generated ${cleanedQuestions.length} unique AI questions`);
-    
-    // CRITICAL: Enforce exact question count
-    if (cleanedQuestions.length !== count) {
-      console.warn(`⚠️ Question count mismatch: Expected ${count}, got ${cleanedQuestions.length}`);
-      
-      if (cleanedQuestions.length > count) {
-        // Trim excess questions
-        console.log(`✂️ Trimming ${cleanedQuestions.length - count} excess questions`);
-        return cleanedQuestions.slice(0, count);
-      } else if (cleanedQuestions.length < count && retryCount < MAX_RETRIES) {
-        // Too few questions - retry
-        console.log(`🔄 Too few questions. Retrying to get exactly ${count} questions...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        return generateQuestions(examName, count, retryCount + 1);
+      // Safety check: if we have enough questions, stop early
+      if (allQuestions.length >= totalCount) {
+        console.log(`✅ Reached target of ${totalCount} questions early`);
+        break;
       }
     }
 
-    return cleanedQuestions;
+    // Validate final count
+    if (allQuestions.length === 0) {
+      throw new Error("No questions were generated. Please check your API key and try again.");
+    }
 
-  } catch (e) {
-    console.error("❌ AI Generation Error:", e);
+    // Check if we got at least 80% of requested questions (lowered from 90%)
+    if (allQuestions.length < totalCount * 0.8) {
+      if (retryCount < MAX_RETRIES) {
+        console.log(`⚠️ Only ${allQuestions.length}/${totalCount} generated. Retrying entire process...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        return generateQuestions(examName, totalCount, retryCount + 1);
+      }
+      
+      console.warn(`⚠️ Generated ${allQuestions.length}/${totalCount} questions after ${MAX_RETRIES} attempts`);
+      throw new Error(`Could only generate ${allQuestions.length} questions after multiple attempts. Please try again or use a different model.`);
+    }
+
+    // Trim to exact count if we have more
+    if (allQuestions.length > totalCount) {
+      console.log(`✂️ Trimming from ${allQuestions.length} to exactly ${totalCount} questions`);
+      allQuestions = allQuestions.slice(0, totalCount);
+    }
+
+    if (allQuestions.length < totalCount) {
+      console.warn(`⚠️ Generated ${allQuestions.length}/${totalCount} questions (${Math.round(allQuestions.length/totalCount*100)}% - acceptable)`);
+    }
+
+    console.log(`✅ Successfully generated ${allQuestions.length} questions for ${examName}`);
+    return allQuestions;
+
+  } catch (error) {
+    console.error("❌ Question generation failed:", error);
     
-    // Retry logic for transient failures
-    if (retryCount < MAX_RETRIES && e.message.includes('JSON')) {
-      console.log(`🔄 Retrying... Attempt ${retryCount + 1} of ${MAX_RETRIES}`);
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-      return generateQuestions(examName, count, retryCount + 1);
+    // Retry logic for complete failures
+    if (retryCount < MAX_RETRIES && 
+        (error.message.includes('JSON') || 
+         error.message.includes('parse') || 
+         error.message.includes('malformed') ||
+         error.message.includes('Empty'))) {
+      console.log(`🔄 Retrying entire generation... Attempt ${retryCount + 1}/${MAX_RETRIES}`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      return generateQuestions(examName, totalCount, retryCount + 1);
     }
     
-    throw new Error(`Failed to generate questions: ${e.message}`);
+    throw error;
   }
 };

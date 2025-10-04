@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, AlertTriangle } from 'lucide-react';
 import { EXAM_CONFIGS } from '../config/examConfig';
 import { Button, Card } from './UIComponents';
 
@@ -14,6 +14,7 @@ export const Quiz = ({
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [timeLeft, setTimeLeft] = useState(EXAM_CONFIGS[examName].timeLimit * 60);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [unansweredQuestions, setUnansweredQuestions] = useState([]);
   
   const question = questions[currentQuestion];
   const isLastQuestion = currentQuestion === questions.length - 1;
@@ -61,12 +62,31 @@ export const Quiz = ({
     }
   };
 
+  const handleJumpToQuestion = (index) => {
+    setCurrentQuestion(index);
+  };
+
   const handleSubmit = () => {
+    // Check for unanswered questions
+    const unanswered = [];
+    for (let i = 0; i < questions.length; i++) {
+      if (!answers[i]) {
+        unanswered.push(i + 1); // Store 1-based question numbers
+      }
+    }
+    setUnansweredQuestions(unanswered);
     setShowConfirm(true);
   };
 
   const answeredCount = Object.keys(answers).length;
   const progressPercentage = (answeredCount / questions.length) * 100;
+
+  // Get question status for navigator
+  const getQuestionStatus = (index) => {
+    if (index === currentQuestion) return 'current';
+    if (answers[index]) return 'answered';
+    return 'unanswered';
+  };
 
   if (!question) {
     return (
@@ -80,7 +100,7 @@ export const Quiz = ({
     <div className="max-w-4xl mx-auto">
       {/* Header with timer and progress */}
       <Card className="mb-6">
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center mb-4">
           <div>
             <h1 className="text-xl font-bold text-gray-800">{examName}</h1>
             <p className="text-sm text-gray-600">
@@ -96,7 +116,7 @@ export const Quiz = ({
         </div>
 
         {/* Progress Bar */}
-        <div className="mt-4">
+        <div className="mb-4">
           <div className="flex justify-between text-sm text-gray-600 mb-1">
             <span>Progress</span>
             <span>{answeredCount}/{questions.length} answered</span>
@@ -106,6 +126,48 @@ export const Quiz = ({
               className="bg-blue-600 h-2 rounded-full transition-all duration-300"
               style={{ width: `${progressPercentage}%` }}
             ></div>
+          </div>
+        </div>
+
+        {/* Question Navigator Grid */}
+        <div className="border-t pt-4">
+          <p className="text-xs text-gray-600 mb-2 font-medium">Question Navigator (click to jump):</p>
+          <div className="grid grid-cols-10 gap-2">
+            {questions.map((_, index) => {
+              const status = getQuestionStatus(index);
+              return (
+                <button
+                  key={index}
+                  onClick={() => handleJumpToQuestion(index)}
+                  className={`
+                    w-full aspect-square rounded-lg font-semibold text-sm transition-all
+                    ${status === 'current' 
+                      ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-2' 
+                      : status === 'answered'
+                      ? 'bg-green-500 text-white hover:bg-green-600'
+                      : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                    }
+                  `}
+                  title={`Question ${index + 1} - ${status === 'answered' ? 'Answered' : 'Not answered'}`}
+                >
+                  {index + 1}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex gap-4 text-xs text-gray-600 mt-3">
+            <div className="flex items-center gap-1">
+              <div className="w-4 h-4 bg-blue-600 rounded"></div>
+              <span>Current</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-4 h-4 bg-green-500 rounded"></div>
+              <span>Answered</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-4 h-4 bg-gray-200 rounded"></div>
+              <span>Unanswered</span>
+            </div>
           </div>
         </div>
       </Card>
@@ -193,26 +255,63 @@ export const Quiz = ({
         </div>
       </Card>
 
-      {/* Confirmation Modal */}
+      {/* Confirmation Modal with Unanswered Warning */}
       {showConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <Card className="max-w-md mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="max-w-md w-full">
             <h3 className="text-xl font-bold mb-4">Submit Exam?</h3>
             <p className="text-gray-600 mb-2">
               You have answered {answeredCount} out of {questions.length} questions.
             </p>
-            {answeredCount < questions.length && (
-              <p className="text-orange-600 text-sm mb-4">
-                ⚠️ You have {questions.length - answeredCount} unanswered questions.
-              </p>
+            
+            {unansweredQuestions.length > 0 && (
+              <div className="my-4 p-4 bg-orange-50 border-l-4 border-orange-500 rounded">
+                <div className="flex items-start gap-2 mb-2">
+                  <AlertTriangle className="text-orange-600 flex-shrink-0 mt-0.5" size={20} />
+                  <div>
+                    <p className="font-semibold text-orange-800">
+                      {unansweredQuestions.length} Unanswered Question{unansweredQuestions.length > 1 ? 's' : ''}
+                    </p>
+                    <p className="text-sm text-orange-700 mt-1">
+                      Questions: {unansweredQuestions.slice(0, 10).join(', ')}
+                      {unansweredQuestions.length > 10 && '...'}
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Clickable question numbers */}
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {unansweredQuestions.slice(0, 15).map(qNum => (
+                    <button
+                      key={qNum}
+                      onClick={() => {
+                        setShowConfirm(false);
+                        handleJumpToQuestion(qNum - 1);
+                      }}
+                      className="px-3 py-1 bg-orange-200 hover:bg-orange-300 text-orange-800 rounded-lg text-sm font-semibold transition"
+                    >
+                      Q{qNum}
+                    </button>
+                  ))}
+                  {unansweredQuestions.length > 15 && (
+                    <span className="px-3 py-1 text-orange-600 text-sm">
+                      +{unansweredQuestions.length - 15} more
+                    </span>
+                  )}
+                </div>
+              </div>
             )}
+            
             <p className="text-gray-600 mb-6">
               Are you sure you want to submit your exam?
             </p>
             
             <div className="flex space-x-3 justify-end">
               <Button
-                onClick={() => setShowConfirm(false)}
+                onClick={() => {
+                  setShowConfirm(false);
+                  setUnansweredQuestions([]);
+                }}
                 color="bg-gray-400 hover:bg-gray-500"
               >
                 Continue Exam

@@ -1,4 +1,4 @@
-import { ArrowLeft, RefreshCw, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, RefreshCw, CheckCircle, XCircle, BookOpen } from 'lucide-react';
 import { EXAM_CONFIGS } from '../config/examConfig';
 import { Button, Card } from './UIComponents';
 
@@ -10,7 +10,8 @@ export const Results = ({
   onBackToDashboard, 
   onRestart, 
   examName, 
-  timeSpent 
+  timeSpent,
+  isReviewMode = false
 }) => {
   const percentage = ((score / totalQuestions) * 100).toFixed(0);
   const config = EXAM_CONFIGS[examName];
@@ -24,10 +25,27 @@ export const Results = ({
 
   return (
     <div className="max-w-6xl mx-auto">
+      {/* Review Mode Banner */}
+      {isReviewMode && (
+        <Card className="mb-6 bg-blue-50 border-2 border-blue-300">
+          <div className="flex items-center gap-3">
+            <BookOpen className="text-blue-600" size={28} />
+            <div>
+              <h3 className="text-lg font-bold text-blue-900">📖 Review Mode - Past Exam Attempt</h3>
+              <p className="text-sm text-blue-700">
+                You are reviewing a previously completed exam. Scroll down to see your answers and explanations.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Results Summary */}
       <Card className="mb-8">
         <div className="text-center pb-6 border-b">
-          <h2 className="text-4xl font-extrabold text-gray-800 mb-2">Exam Results</h2>
+          <h2 className="text-4xl font-extrabold text-gray-800 mb-2">
+            {isReviewMode ? 'Exam Review' : 'Exam Results'}
+          </h2>
           <h3 className="text-xl text-gray-600 mb-4">{examName}</h3>
           
           <div className="grid md:grid-cols-3 gap-6 mb-6">
@@ -84,13 +102,15 @@ export const Results = ({
           >
             Back to Dashboard
           </Button>
-          <Button
-            onClick={onRestart}
-            color="bg-blue-600 hover:bg-blue-700"
-            icon={RefreshCw}
-          >
-            Retake Exam
-          </Button>
+          {!isReviewMode && (
+            <Button
+              onClick={onRestart}
+              color="bg-blue-600 hover:bg-blue-700"
+              icon={RefreshCw}
+            >
+              Retake Exam
+            </Button>
+          )}
         </div>
       </Card>
 

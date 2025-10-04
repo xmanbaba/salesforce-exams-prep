@@ -1,5 +1,5 @@
 // hooks/useFirestore.js
-// Custom hook for Firestore database operations
+// Fixed: Now saves complete question and answer data for review
 
 import { useState, useEffect, useCallback } from 'react';
 import { 
@@ -18,7 +18,6 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 export const useFirestore = (user) => {
   const [quizzes, setQuizzes] = useState({});
-  const [userQuestions, setUserQuestions] = useState([]);
 
   // Helper to get user-specific data path
   const getUserDataPath = (collectionName) => {
@@ -48,7 +47,9 @@ export const useFirestore = (user) => {
         
         attemptsByExam[examName].push({ 
           ...attempt, 
-          id: doc.id 
+          id: doc.id,
+          // Ensure we have the review data
+          hasReviewData: !!(attempt.questions && attempt.userAnswers)
         });
       });
       
@@ -60,10 +61,10 @@ export const useFirestore = (user) => {
     return () => unsubscribe();
   }, [user]);
 
-  // Add quiz attempt to Firestore
-  const addQuizAttempt = useCallback(async (examName, score, totalQuestions, timeSpent) => {
+  // Add quiz attempt with COMPLETE data for review
+  const addQuizAttempt = useCallback(async (examName, score, totalQuestions, timeSpent, questions, userAnswers) => {
     if (!user || !db) {
-      console.error("❌ Cannot add attempt: User not authenticated or DB not available.");
+      console.error("❌ Cannot save: User not authenticated or DB unavailable");
       return;
     }
 
@@ -71,7 +72,7 @@ export const useFirestore = (user) => {
       const percentage = Math.round((score / totalQuestions) * 100);
       const passMark = EXAM_CONFIGS[examName]?.passMark || 70;
       
-      await addDoc(getUserDataPath('examAttempts'), {
+      const attemptData = {
         examName,
         score,
         totalQuestions,
@@ -80,17 +81,22 @@ export const useFirestore = (user) => {
         passed: percentage >= passMark,
         userId: user.uid,
         timestamp: serverTimestamp(),
-      });
+        // Store complete question and answer data for review
+        questions: questions || [],
+        userAnswers: userAnswers || {}
+      };
       
-      console.log("✅ Quiz attempt saved successfully");
-    } catch (e) {
-      console.error("❌ Error adding exam attempt to Firestore:", e);
+      await addDoc(getUserDataPath('examAttempts'), attemptData);
+      
+      console.log("✅ Quiz attempt saved with full review data");
+    } catch (error) {
+      console.error("❌ Error saving exam attempt:", error);
+      throw error;
     }
   }, [user]);
 
   return { 
     quizzes, 
-    userQuestions, 
     addQuizAttempt 
   };
 };
