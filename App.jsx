@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Loader2, Zap } from 'lucide-react';
 
 // Import custom hooks
@@ -19,7 +19,7 @@ function App() {
   // Auth and data hooks
   const { user, isAuthReady, signInWithGoogle, signInWithEmailPassword,
     createAccount, handleSignOut } = useAuth();
-  const { quizzes, addQuizAttempt } = useFirestore(user);
+  const { quizzes, addQuizAttempt, deleteAttempt } = useFirestore(user);
 
   // Application state
   const [exam, setExam] = useState(null);
@@ -30,13 +30,15 @@ function App() {
   const [examStartTime, setExamStartTime] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [reviewMode, setReviewMode] = useState(null); // For reviewing past attempts
+  const [reviewMode, setReviewMode] = useState(null);
+  
+  // NEW: Track if quiz has been submitted to prevent duplicates
+  const hasSubmittedRef = useRef(false);
 
   // Handle starting a quiz (regular or retake)
   const handleStartQuiz = useCallback((examName, newQuestions, isRetake = false) => {
     setExam(examName);
 
-    // Randomize questions for retakes
     const finalQuestions = isRetake ? randomizeQuestions(newQuestions || []) : (newQuestions || []);
 
     setQuestions(finalQuestions);
@@ -44,7 +46,8 @@ function App() {
     setScore(0);
     setExamStartTime(Date.now());
     setCurrentPage('quiz');
-    setReviewMode(null); // Clear review mode when starting new quiz
+    setReviewMode(null);
+    hasSubmittedRef.current = false; // Reset submission flag
   }, []);
 
   // Handle generating questions from AI
@@ -75,13 +78,13 @@ function App() {
       let errorMessage = 'Failed to generate questions. ';
 
       if (e.message.includes('API key')) {
-        errorMessage += 'Gemini API key is not configured. Please add VITE_GEMINI_API_KEY to your .env file.';
+        errorMessage += 'API key is not configured. Please add your API keys to the .env file.';
       } else if (e.message.includes('429') || e.message.includes('rate limit')) {
         errorMessage += 'API rate limit exceeded. Please wait a few minutes and try again.';
       } else if (e.message.includes('400')) {
-        errorMessage += 'API request error. Please verify your Gemini API key is valid and active.';
+        errorMessage += 'API request error. Please verify your API key is valid and active.';
       } else if (e.message.includes('401') || e.message.includes('403')) {
-        errorMessage += 'Authentication failed. Please check your Gemini API key permissions.';
+        errorMessage += 'Authentication failed. Please check your API key permissions.';
       } else if (e.message.includes('network') || e.message.includes('fetch')) {
         errorMessage += 'Network error. Please check your internet connection and try again.';
       } else {
@@ -100,8 +103,17 @@ function App() {
     await handleGenerateQuestions(examName, false);
   }, [handleGenerateQuestions]);
 
-  // Handle quiz submission
+  // Handle quiz submission - FIXED TO PREVENT DUPLICATES
   const handleSubmitQuiz = useCallback(async () => {
+    // Prevent duplicate submissions
+    if (hasSubmittedRef.current) {
+      console.log('⚠️ Quiz already submitted, ignoring duplicate submission');
+      return;
+    }
+
+    hasSubmittedRef.current = true;
+    console.log('📝 Processing quiz submission...');
+
     const finalScore = questions.reduce((acc, q, index) => {
       const userAnswer = answers[index];
       const correctAnswer = q.answer;
@@ -127,11 +139,10 @@ function App() {
 
     if (user && addQuizAttempt) {
       try {
-        // Save with full question and answer data for review capability
         await addQuizAttempt(exam, finalScore, questions.length, timeSpent, questions, answers);
-        console.log('Quiz results saved successfully with full data');
+        console.log('✅ Quiz results saved successfully');
       } catch (error) {
-        console.error('Failed to save quiz results:', error);
+        console.error('❌ Failed to save quiz results:', error);
       }
     }
 
@@ -161,14 +172,15 @@ function App() {
     setQuestions(attempt.questions);
     setAnswers(attempt.userAnswers);
     setScore(attempt.score);
-    setExamStartTime(null); // No timer in review mode
-    setCurrentPage('results'); // Go directly to results view
+    setExamStartTime(null);
+    setCurrentPage('results');
   }, []);
 
   // Handle back to dashboard and clear review mode
   const handleBackToDashboard = useCallback(() => {
     setReviewMode(null);
     setCurrentPage('selection');
+    hasSubmittedRef.current = false; // Reset for next quiz
   }, []);
 
   // Render pages
@@ -203,6 +215,7 @@ function App() {
             generateQuestions={handleGenerateQuestions}
             onNewQuiz={handleNewQuiz}
             onReviewPastExam={handleReviewPastExam}
+            onDeleteAttempt={deleteAttempt}
           />
         );
 

@@ -15,6 +15,7 @@ export const Quiz = ({
   const [timeLeft, setTimeLeft] = useState(EXAM_CONFIGS[examName].timeLimit * 60);
   const [showConfirm, setShowConfirm] = useState(false);
   const [unansweredQuestions, setUnansweredQuestions] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false); // NEW: Prevent multiple submissions
   
   const question = questions[currentQuestion];
   const isLastQuestion = currentQuestion === questions.length - 1;
@@ -22,7 +23,7 @@ export const Quiz = ({
   // Timer effect
   useEffect(() => {
     if (timeLeft <= 0) {
-      onSubmitQuiz();
+      handleFinalSubmit();
       return;
     }
 
@@ -31,7 +32,7 @@ export const Quiz = ({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [timeLeft, onSubmitQuiz]);
+  }, [timeLeft]);
 
   const formatTime = (seconds) => {
     const hours = Math.floor(seconds / 3600);
@@ -45,8 +46,8 @@ export const Quiz = ({
   };
 
   const getTimeColor = () => {
-    if (timeLeft < 300) return 'text-red-600'; // Less than 5 minutes
-    if (timeLeft < 900) return 'text-yellow-600'; // Less than 15 minutes
+    if (timeLeft < 300) return 'text-red-600';
+    if (timeLeft < 900) return 'text-yellow-600';
     return 'text-green-600';
   };
 
@@ -71,17 +72,36 @@ export const Quiz = ({
     const unanswered = [];
     for (let i = 0; i < questions.length; i++) {
       if (!answers[i]) {
-        unanswered.push(i + 1); // Store 1-based question numbers
+        unanswered.push(i + 1);
       }
     }
     setUnansweredQuestions(unanswered);
     setShowConfirm(true);
   };
 
+  // NEW: Separate function for actual submission with debouncing
+  const handleFinalSubmit = async () => {
+    if (isSubmitting) {
+      console.log('⚠️ Submit already in progress, ignoring duplicate click');
+      return;
+    }
+
+    setIsSubmitting(true);
+    console.log('📝 Submitting quiz...');
+    
+    try {
+      await onSubmitQuiz();
+      console.log('✅ Quiz submitted successfully');
+    } catch (error) {
+      console.error('❌ Error submitting quiz:', error);
+      setIsSubmitting(false);
+    }
+    // Note: isSubmitting stays true to prevent re-submission after navigation
+  };
+
   const answeredCount = Object.keys(answers).length;
   const progressPercentage = (answeredCount / questions.length) * 100;
 
-  // Get question status for navigator
   const getQuestionStatus = (index) => {
     if (index === currentQuestion) return 'current';
     if (answers[index]) return 'answered';
@@ -223,6 +243,7 @@ export const Quiz = ({
             onClick={onBack}
             color="bg-gray-400 hover:bg-gray-500"
             icon={ArrowLeft}
+            disabled={isSubmitting}
           >
             Exit Exam
           </Button>
@@ -230,7 +251,7 @@ export const Quiz = ({
           <div className="flex space-x-3">
             <Button
               onClick={handlePrev}
-              disabled={currentQuestion === 0}
+              disabled={currentQuestion === 0 || isSubmitting}
               color="bg-indigo-500 hover:bg-indigo-600"
             >
               Previous
@@ -240,13 +261,15 @@ export const Quiz = ({
               <Button
                 onClick={handleSubmit}
                 color="bg-green-600 hover:bg-green-700"
+                disabled={isSubmitting}
               >
-                Submit Exam
+                {isSubmitting ? 'Submitting...' : 'Submit Exam'}
               </Button>
             ) : (
               <Button
                 onClick={handleNext}
                 color="bg-blue-600 hover:bg-blue-700"
+                disabled={isSubmitting}
               >
                 Next
               </Button>
@@ -313,14 +336,16 @@ export const Quiz = ({
                   setUnansweredQuestions([]);
                 }}
                 color="bg-gray-400 hover:bg-gray-500"
+                disabled={isSubmitting}
               >
                 Continue Exam
               </Button>
               <Button
-                onClick={onSubmitQuiz}
+                onClick={handleFinalSubmit}
                 color="bg-green-600 hover:bg-green-700"
+                disabled={isSubmitting}
               >
-                Submit Now
+                {isSubmitting ? 'Submitting...' : 'Submit Now'}
               </Button>
             </div>
           </Card>

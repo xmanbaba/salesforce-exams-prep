@@ -1,4 +1,4 @@
-import { Loader2, Zap, Plus, CheckCircle, RefreshCw, Eye } from 'lucide-react';
+import { Loader2, Zap, Plus, CheckCircle, RefreshCw, Eye, Trash2 } from 'lucide-react';
 import { EXAM_CONFIGS } from '../config/examConfig';
 import { Button, Card } from './UIComponents';
 
@@ -9,8 +9,25 @@ export const ExamSelection = ({
   error, 
   generateQuestions,
   onNewQuiz,
-  onReviewPastExam
+  onReviewPastExam,
+  onDeleteAttempt
 }) => {
+  const handleDelete = async (examName, attemptId, e) => {
+    e.stopPropagation(); // Prevent triggering review when clicking delete
+    
+    if (!confirm('Are you sure you want to delete this exam attempt? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      await onDeleteAttempt(attemptId);
+      console.log('✅ Exam attempt deleted successfully');
+    } catch (error) {
+      console.error('❌ Failed to delete exam attempt:', error);
+      alert('Failed to delete exam attempt. Please try again.');
+    }
+  };
+
   return (
     <Card className="max-w-6xl mx-auto">
       <h2 className="text-3xl font-extrabold text-gray-800 mb-8 text-center">
@@ -116,7 +133,7 @@ export const ExamSelection = ({
                     return (
                       <div 
                         key={attempt.id || index} 
-                        className={`p-3 rounded-lg border-2 transition-all ${
+                        className={`p-3 rounded-lg border-2 transition-all relative group ${
                           hasReviewData 
                             ? 'border-blue-300 bg-white hover:border-blue-500 hover:shadow-md cursor-pointer' 
                             : 'border-gray-200 bg-gray-100 cursor-not-allowed'
@@ -124,7 +141,16 @@ export const ExamSelection = ({
                         onClick={() => hasReviewData && onReviewPastExam && onReviewPastExam(attempt)}
                         title={hasReviewData ? 'Click to review this exam attempt' : 'Review data not available'}
                       >
-                        <div className="flex justify-between items-start mb-2">
+                        {/* Delete button - appears on hover */}
+                        <button
+                          onClick={(e) => handleDelete(examName, attempt.id, e)}
+                          className="absolute top-2 right-2 p-1.5 bg-red-100 hover:bg-red-200 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Delete this attempt"
+                        >
+                          <Trash2 size={14} className="text-red-600" />
+                        </button>
+
+                        <div className="flex justify-between items-start mb-2 pr-8">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium text-gray-600">
                               Attempt {attemptNumber}

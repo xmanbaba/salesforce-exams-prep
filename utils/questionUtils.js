@@ -1,16 +1,34 @@
 // utils/questionUtils.js
-// COMPLETE VERSION: Question accumulator + Multi-LLM fallback + All original features
+// FIXED VERSION: DeepSeek primary, Gemini 2.0 Flash fallback, Moonshot removed, Timer added
 
 import { EXAM_CONFIGS } from '../config/examConfig';
 
 // ============================================================================
-// API CONFIGURATION - Multi-LLM Support
+// API CONFIGURATION - Multi-LLM Support (FIXED ORDER)
 // ============================================================================
 
 const LLM_CONFIGS = {
+  deepseek: {
+    apiKey: import.meta.env.VITE_DEEPSEEK_API_KEY || "",
+    modelName: "deepseek/deepseek-r1",
+    endpoint: () => "https://openrouter.ai/api/v1/chat/completions",
+    buildPayload: (prompt) => ({
+      model: "deepseek/deepseek-r1",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.5,
+      max_tokens: 3072
+    }),
+    extractText: (result) => result.choices?.[0]?.message?.content,
+    headers: (apiKey) => ({
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': window.location.origin || 'https://yourapp.com',
+      'X-Title': 'Salesforce Exam Prep App'
+    })
+  },
   gemini: {
     apiKey: import.meta.env.VITE_GEMINI_API_KEY || "",
-    modelName: import.meta.env.VITE_GEMINI_MODEL_NAME || "gemini-2.5-flash",
+    modelName: "gemini-2.0-flash-exp", // CHANGED FROM 2.5 to 2.0
     endpoint: (modelName, apiKey) => 
       `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
     buildPayload: (prompt) => ({
@@ -24,51 +42,40 @@ const LLM_CONFIGS = {
       }
     }),
     extractText: (result) => result.candidates?.[0]?.content?.parts?.[0]?.text
-  },
-  deepseek: {
-    apiKey: import.meta.env.VITE_DEEPSEEK_API_KEY || "",
-    modelName: import.meta.env.VITE_DEEPSEEK_MODEL_NAME || "deepseek/deepseek-r1",
-    endpoint: () => "https://openrouter.ai/api/v1/chat/completions", // ← CHANGED TO OPENROUTER
-    buildPayload: (prompt) => ({
-      model: "deepseek/deepseek-r1", // ← CHANGED TO OPENROUTER MODEL FORMAT
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.5,
-      max_tokens: 3072
-    }),
-    extractText: (result) => result.choices?.[0]?.message?.content,
-    headers: (apiKey) => ({
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': 'https://yourapp.com', // ← ADDED FOR OPENROUTER
-      'X-Title': 'Exam Prep App' // ← ADDED FOR OPENROUTER
-    })
-  },
-  moonshot: {
-    apiKey: import.meta.env.VITE_MOONSHOT_API_KEY || "",
-    modelName: import.meta.env.VITE_MOONSHOT_MODEL || "moonshot-v1-8k",
-    endpoint: () => "https://api.moonshot.cn/v1/chat/completions",
-    buildPayload: (prompt) => ({
-      model: import.meta.env.VITE_MOONSHOT_MODEL || "moonshot-v1-8k",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.5,
-      max_tokens: 3072
-    }),
-    extractText: (result) => result.choices?.[0]?.message?.content,
-    headers: (apiKey) => ({
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    })
   }
+  // MOONSHOT REMOVED COMPLETELY
 };
 
-const MAX_BATCH_SIZE = 12; // Optimized batch size for reliability
-let questionAccumulator = []; // Persists across retries
+const MAX_BATCH_SIZE = 12;
+let questionAccumulator = [];
+
+// ============================================================================
+// TIMER TRACKING (NEW)
+// ============================================================================
+
+let generationStartTime = null;
+
+const startGenerationTimer = () => {
+  generationStartTime = Date.now();
+  console.log(`⏱️ TIMER STARTED: ${new Date(generationStartTime).toLocaleTimeString()}`);
+};
+
+const getElapsedTime = () => {
+  if (!generationStartTime) return 0;
+  return Math.floor((Date.now() - generationStartTime) / 1000);
+};
+
+const logElapsedTime = (label = "Elapsed") => {
+  const elapsed = getElapsedTime();
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  console.log(`⏱️ ${label}: ${minutes}m ${seconds}s (${elapsed}s total)`);
+};
 
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
 
-// Fisher-Yates shuffle algorithm
 export const shuffleArray = (array) => {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -78,7 +85,6 @@ export const shuffleArray = (array) => {
   return shuffled;
 };
 
-// Randomize questions and shuffle options
 export const randomizeQuestions = (questions) => {
   return shuffleArray(questions).map(question => {
     const shuffledOptions = shuffleArray([...question.options]);
@@ -96,7 +102,7 @@ export const randomizeQuestions = (questions) => {
 };
 
 // ============================================================================
-// CERTIFICATION-SPECIFIC PROMPTS (PRESERVED FROM ORIGINAL)
+// CERTIFICATION-SPECIFIC PROMPTS
 // ============================================================================
 
 const getCertificationPrompt = (examName, count) => {
@@ -178,7 +184,7 @@ CRITICAL: Generate ${count} UNIQUE questions with focus on real-world AI scenari
 };
 
 // ============================================================================
-// JSON PROCESSING (PRESERVED FROM ORIGINAL)
+// JSON PROCESSING
 // ============================================================================
 
 const repairJSON = (text) => {
@@ -307,6 +313,7 @@ const generateBatchWithLLM = async (llmName, examName, batchSize, batchNumber, a
   }
 
   console.log(`📦 [${llmName.toUpperCase()}] Attempt ${attemptNumber}, Batch ${batchNumber}: Requesting ${batchSize} questions...`);
+  logElapsedTime(`Before ${llmName.toUpperCase()} Batch ${batchNumber}`);
 
   const systemPrompt = getCertificationPrompt(examName, batchSize);
   
@@ -363,7 +370,6 @@ For True/False questions:
       const errorText = await response.text();
       console.error(`❌ [${llmName.toUpperCase()}] API error:`, response.status);
       
-      // Check for fatal errors
       if (response.status === 404 || errorText.includes('not found')) {
         throw new Error(`Model "${llm.modelName}" not found. Check VITE_${llmName.toUpperCase()}_MODEL_NAME in .env`);
       }
@@ -388,6 +394,7 @@ For True/False questions:
     const normalized = parsed.map((q, i) => normalizeQuestion(q, i)).filter(q => q !== null);
 
     console.log(`✅ [${llmName.toUpperCase()}] Attempt ${attemptNumber}, Batch ${batchNumber}: Got ${normalized.length}/${batchSize} valid questions`);
+    logElapsedTime(`After ${llmName.toUpperCase()} Batch ${batchNumber}`);
 
     return normalized;
 
@@ -402,16 +409,18 @@ For True/False questions:
 // ============================================================================
 
 export const generateQuestions = async (examName, totalCount) => {
+  // START TIMER
+  startGenerationTimer();
+  
   console.log(`\n🚀 Starting question generation for ${examName}`);
   console.log(`🎯 Target: ${totalCount} questions`);
   console.log(`📊 Using batch size: ${MAX_BATCH_SIZE}`);
-  console.log(`🔄 Multi-LLM fallback: Gemini → DeepSeek → Moonshot\n`);
+  console.log(`🔄 Multi-LLM fallback: DeepSeek (primary) → Gemini 2.0 Flash (fallback)\n`);
 
-  // Reset accumulator for new exam generation
   questionAccumulator = [];
 
   const MAX_ATTEMPTS = 5;
-  const LLM_PRIORITY = ['gemini', 'deepseek', 'moonshot'];
+  const LLM_PRIORITY = ['deepseek', 'gemini']; // FIXED ORDER
   
   let attemptNumber = 0;
 
@@ -421,6 +430,7 @@ export const generateQuestions = async (examName, totalCount) => {
     const stillNeeded = totalCount - questionAccumulator.length;
     console.log(`\n🔄 ATTEMPT ${attemptNumber}/${MAX_ATTEMPTS}`);
     console.log(`📊 Current: ${questionAccumulator.length}/${totalCount} | Still need: ${stillNeeded}`);
+    logElapsedTime("Current Progress");
 
     const numBatches = Math.ceil(stillNeeded / MAX_BATCH_SIZE);
     console.log(`📦 Will generate ${numBatches} batches`);
@@ -430,35 +440,32 @@ export const generateQuestions = async (examName, totalCount) => {
       
       if (remaining <= 0) {
         console.log(`✅ Target reached! Have ${questionAccumulator.length} questions`);
+        logElapsedTime("Target Reached");
         break;
       }
 
       const batchSize = Math.min(MAX_BATCH_SIZE, remaining);
       let batchQuestions = null;
 
-      // Try each LLM in priority order
       for (const llmName of LLM_PRIORITY) {
         try {
           batchQuestions = await generateBatchWithLLM(llmName, examName, batchSize, i + 1, attemptNumber);
           
           if (batchQuestions && batchQuestions.length > 0) {
-            break; // Success! Stop trying other LLMs
+            break;
           }
         } catch (error) {
           console.warn(`⚠️ ${llmName} failed, trying next LLM...`);
           
-          // Fatal error - stop completely
           if (error.message.includes('not found') || error.message.includes('404')) {
             console.error(`💥 CRITICAL: ${error.message}`);
             throw error;
           }
           
-          // Continue to next LLM
           continue;
         }
       }
 
-      // If all LLMs failed for this batch
       if (!batchQuestions || batchQuestions.length === 0) {
         console.error(`❌ All LLMs failed for batch ${i + 1}`);
         
@@ -469,7 +476,6 @@ export const generateQuestions = async (examName, totalCount) => {
         continue;
       }
 
-      // Add to accumulator (deduplicate)
       const newQuestions = batchQuestions.filter(newQ =>
         !questionAccumulator.some(existingQ => existingQ.question === newQ.question)
       );
@@ -478,53 +484,55 @@ export const generateQuestions = async (examName, totalCount) => {
 
       console.log(`📈 Accumulator: ${questionAccumulator.length}/${totalCount} total questions`);
 
-      // Small delay between batches
       if (i < numBatches - 1 && questionAccumulator.length < totalCount) {
         console.log('⏳ Waiting 2 seconds...');
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
-      // Check if we've reached target
       if (questionAccumulator.length >= totalCount) {
         console.log(`🎉 Target reached at ${questionAccumulator.length} questions!`);
+        logElapsedTime("Final Target Reached");
         break;
       }
     }
 
-    // Exit early if we have enough
     if (questionAccumulator.length >= totalCount) {
       break;
     }
 
-    // Delay before next attempt
     if (attemptNumber < MAX_ATTEMPTS && questionAccumulator.length < totalCount) {
       console.log(`\n⏳ Waiting 3 seconds before next attempt...`);
       await new Promise(resolve => setTimeout(resolve, 3000));
     }
   }
 
-  // Final validation
   if (questionAccumulator.length === 0) {
     throw new Error("Failed to generate any questions. Please check your API keys and try again.");
   }
 
-  // Return exactly what we have (or trim if over)
   const finalQuestions = questionAccumulator.slice(0, totalCount);
 
-  console.log(`\n✅ GENERATION COMPLETE`);
+  // FINAL TIMER LOG
+  const totalTime = getElapsedTime();
+  const minutes = Math.floor(totalTime / 60);
+  const seconds = totalTime % 60;
+
+  console.log(`\n✅ ========== GENERATION COMPLETE ==========`);
   console.log(`📊 Generated: ${finalQuestions.length}/${totalCount} questions`);
   console.log(`🔄 Total attempts: ${attemptNumber}`);
-  console.log(`💰 Efficiency: ${(finalQuestions.length / attemptNumber).toFixed(1)} questions per attempt average\n`);
+  console.log(`💰 Efficiency: ${(finalQuestions.length / attemptNumber).toFixed(1)} questions per attempt average`);
+  console.log(`⏱️ TOTAL TIME: ${minutes} minutes ${seconds} seconds (${totalTime}s)`);
+  console.log(`⚡ Speed: ${(finalQuestions.length / (totalTime / 60)).toFixed(1)} questions per minute`);
+  console.log(`==========================================\n`);
 
   if (finalQuestions.length < totalCount) {
     const percentage = Math.round((finalQuestions.length / totalCount) * 100);
     console.warn(`⚠️ Generated ${finalQuestions.length}/${totalCount} questions (${percentage}%)`);
     
-    // If we got less than 80%, throw error
     if (percentage < 80) {
       throw new Error(`Only generated ${finalQuestions.length}/${totalCount} questions (${percentage}%). Please try again.`);
     }
   }
 
   return finalQuestions;
-};
+}
