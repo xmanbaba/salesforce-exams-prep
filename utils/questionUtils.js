@@ -1,13 +1,46 @@
 // utils/questionUtils.js
-// FIXED VERSION: DeepSeek primary, Gemini 2.0 Flash fallback, Moonshot removed, Timer added
+// FINAL VERSION: Together.ai Llama 3.1 70B (primary) + 20s timeout + Gemini 2.0 + DeepSeek fallback
 
 import { EXAM_CONFIGS } from '../config/examConfig';
 
 // ============================================================================
-// API CONFIGURATION - Multi-LLM Support (FIXED ORDER)
+// API CONFIGURATION - Together.ai Primary
 // ============================================================================
 
 const LLM_CONFIGS = {
+  together: {
+    apiKey: import.meta.env.VITE_TOGETHER_API_KEY || "",
+    modelName: import.meta.env.VITE_TOGETHER_MODEL || "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+    endpoint: () => "https://api.together.xyz/v1/chat/completions",
+    buildPayload: (prompt) => ({
+      model: import.meta.env.VITE_TOGETHER_MODEL || "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.5,
+      max_tokens: 3072
+    }),
+    extractText: (result) => result.choices?.[0]?.message?.content,
+    headers: (apiKey) => ({
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    })
+  },
+  gemini: {
+    apiKey: import.meta.env.VITE_GEMINI_API_KEY || "",
+    modelName: "gemini-2.0-flash-exp",
+    endpoint: (modelName, apiKey) => 
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
+    buildPayload: (prompt) => ({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.5,
+        topP: 0.85,
+        topK: 30,
+        maxOutputTokens: 3072,
+        candidateCount: 1
+      }
+    }),
+    extractText: (result) => result.candidates?.[0]?.content?.parts?.[0]?.text
+  },
   deepseek: {
     apiKey: import.meta.env.VITE_DEEPSEEK_API_KEY || "",
     modelName: "deepseek/deepseek-r1",
@@ -25,32 +58,15 @@ const LLM_CONFIGS = {
       'HTTP-Referer': window.location.origin || 'https://yourapp.com',
       'X-Title': 'Salesforce Exam Prep App'
     })
-  },
-  gemini: {
-    apiKey: import.meta.env.VITE_GEMINI_API_KEY || "",
-    modelName: "gemini-2.0-flash-exp", // CHANGED FROM 2.5 to 2.0
-    endpoint: (modelName, apiKey) => 
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
-    buildPayload: (prompt) => ({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.5,
-        topP: 0.85,
-        topK: 30,
-        maxOutputTokens: 3072,
-        candidateCount: 1
-      }
-    }),
-    extractText: (result) => result.candidates?.[0]?.content?.parts?.[0]?.text
   }
-  // MOONSHOT REMOVED COMPLETELY
 };
 
 const MAX_BATCH_SIZE = 12;
+const API_TIMEOUT_MS = 20000; // 20 seconds timeout
 let questionAccumulator = [];
 
 // ============================================================================
-// TIMER TRACKING (NEW)
+// TIMER TRACKING
 // ============================================================================
 
 let generationStartTime = null;
@@ -70,6 +86,30 @@ const logElapsedTime = (label = "Elapsed") => {
   const minutes = Math.floor(elapsed / 60);
   const seconds = elapsed % 60;
   console.log(`⏱️ ${label}: ${minutes}m ${seconds}s (${elapsed}s total)`);
+};
+
+// ============================================================================
+// TIMEOUT WRAPPER FOR API CALLS
+// ============================================================================
+
+const fetchWithTimeout = async (url, options, timeoutMs = API_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeoutMs / 1000}s`);
+    }
+    throw error;
+  }
 };
 
 // ============================================================================
@@ -301,17 +341,18 @@ const normalizeQuestion = (q, index) => {
 };
 
 // ============================================================================
-// MULTI-LLM BATCH GENERATION
+// MULTI-LLM BATCH GENERATION WITH TIMEOUT
 // ============================================================================
 
 const generateBatchWithLLM = async (llmName, examName, batchSize, batchNumber, attemptNumber) => {
   const llm = LLM_CONFIGS[llmName];
   
   if (!llm.apiKey) {
-    console.warn(`⚠️ ${llmName} API key not configured, skipping`);
+    console.warn(`⚠️ ${llmName.toUpperCase()} API key not configured, skipping`);
     return null;
   }
 
+  const batchStartTime = Date.now();
   console.log(`📦 [${llmName.toUpperCase()}] Attempt ${attemptNumber}, Batch ${batchNumber}: Requesting ${batchSize} questions...`);
   logElapsedTime(`Before ${llmName.toUpperCase()} Batch ${batchNumber}`);
 
@@ -360,18 +401,22 @@ For True/False questions:
   const headers = llm.headers ? llm.headers(llm.apiKey) : { 'Content-Type': 'application/json' };
 
   try {
-    const response = await fetch(llm.endpoint(llm.modelName, llm.apiKey), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
-    });
+    const response = await fetchWithTimeout(
+      llm.endpoint(llm.modelName, llm.apiKey),
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      },
+      API_TIMEOUT_MS
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`❌ [${llmName.toUpperCase()}] API error:`, response.status);
       
       if (response.status === 404 || errorText.includes('not found')) {
-        throw new Error(`Model "${llm.modelName}" not found. Check VITE_${llmName.toUpperCase()}_MODEL_NAME in .env`);
+        throw new Error(`Model "${llm.modelName}" not found`);
       }
       
       throw new Error(`API error (${response.status}): ${errorText.substring(0, 200)}`);
@@ -393,34 +438,42 @@ For True/False questions:
 
     const normalized = parsed.map((q, i) => normalizeQuestion(q, i)).filter(q => q !== null);
 
-    console.log(`✅ [${llmName.toUpperCase()}] Attempt ${attemptNumber}, Batch ${batchNumber}: Got ${normalized.length}/${batchSize} valid questions`);
+    const batchTime = ((Date.now() - batchStartTime) / 1000).toFixed(1);
+    console.log(`✅ [${llmName.toUpperCase()}] Batch ${batchNumber}: Got ${normalized.length}/${batchSize} valid questions in ${batchTime}s`);
     logElapsedTime(`After ${llmName.toUpperCase()} Batch ${batchNumber}`);
 
     return normalized;
 
   } catch (error) {
-    console.error(`❌ [${llmName.toUpperCase()}] Batch generation failed:`, error.message);
+    const batchTime = ((Date.now() - batchStartTime) / 1000).toFixed(1);
+    
+    if (error.message.includes('timeout')) {
+      console.error(`⏱️ [${llmName.toUpperCase()}] TIMEOUT after ${batchTime}s - switching to next LLM`);
+    } else {
+      console.error(`❌ [${llmName.toUpperCase()}] Failed in ${batchTime}s:`, error.message);
+    }
+    
     throw error;
   }
 };
 
 // ============================================================================
-// MAIN GENERATION FUNCTION WITH ACCUMULATOR
+// MAIN GENERATION FUNCTION
 // ============================================================================
 
 export const generateQuestions = async (examName, totalCount) => {
-  // START TIMER
   startGenerationTimer();
   
   console.log(`\n🚀 Starting question generation for ${examName}`);
   console.log(`🎯 Target: ${totalCount} questions`);
   console.log(`📊 Using batch size: ${MAX_BATCH_SIZE}`);
-  console.log(`🔄 Multi-LLM fallback: DeepSeek (primary) → Gemini 2.0 Flash (fallback)\n`);
+  console.log(`⏱️ Timeout: ${API_TIMEOUT_MS / 1000}s per API call`);
+  console.log(`🔄 Multi-LLM fallback: Together.ai Llama 3.1 → Gemini 2.0 → DeepSeek\n`);
 
   questionAccumulator = [];
 
   const MAX_ATTEMPTS = 5;
-  const LLM_PRIORITY = ['deepseek', 'gemini']; // FIXED ORDER
+  const LLM_PRIORITY = ['together', 'gemini', 'deepseek'];
   
   let attemptNumber = 0;
 
@@ -456,12 +509,6 @@ export const generateQuestions = async (examName, totalCount) => {
           }
         } catch (error) {
           console.warn(`⚠️ ${llmName} failed, trying next LLM...`);
-          
-          if (error.message.includes('not found') || error.message.includes('404')) {
-            console.error(`💥 CRITICAL: ${error.message}`);
-            throw error;
-          }
-          
           continue;
         }
       }
@@ -471,7 +518,7 @@ export const generateQuestions = async (examName, totalCount) => {
         
         if (i < numBatches - 1) {
           console.log(`⏭️ Skipping failed batch, continuing...`);
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
         continue;
       }
@@ -501,8 +548,8 @@ export const generateQuestions = async (examName, totalCount) => {
     }
 
     if (attemptNumber < MAX_ATTEMPTS && questionAccumulator.length < totalCount) {
-      console.log(`\n⏳ Waiting 3 seconds before next attempt...`);
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log(`\n⏳ Waiting 2 seconds before next attempt...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
 
@@ -512,7 +559,6 @@ export const generateQuestions = async (examName, totalCount) => {
 
   const finalQuestions = questionAccumulator.slice(0, totalCount);
 
-  // FINAL TIMER LOG
   const totalTime = getElapsedTime();
   const minutes = Math.floor(totalTime / 60);
   const seconds = totalTime % 60;

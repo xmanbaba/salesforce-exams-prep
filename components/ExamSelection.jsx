@@ -38,7 +38,7 @@ export const ExamSelection = ({
         <div className="flex flex-col items-center justify-center p-10 bg-blue-50 rounded-xl mb-8">
           <Loader2 className="animate-spin text-blue-600" size={32} />
           <p className="mt-4 text-lg font-medium text-blue-700">Generating AI questions...</p>
-          <p className="text-sm text-gray-500 mt-1">This may take up to 60 seconds for larger exams.</p>
+          <p className="text-sm text-gray-500 mt-1">This may take up to 3 minutes for larger exams.</p>
         </div>
       )}
 
