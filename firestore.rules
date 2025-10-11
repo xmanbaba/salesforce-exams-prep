@@ -1,166 +1,127 @@
-// hooks/useFirestore.js
-// UPDATED: Added delete function and 7-day automatic cleanup
+rules_version = '2';
 
-import { useState, useEffect, useCallback } from 'react';
-import { 
-  collection, 
-  query, 
-  addDoc, 
-  deleteDoc,
-  doc,
-  serverTimestamp, 
-  orderBy, 
-  onSnapshot,
-  where,
-  getDocs
-} from 'firebase/firestore';
-import { db } from '../config/firebaseConfig';
-import { EXAM_CONFIGS } from '../config/examConfig';
-
-// App ID from Claude.ai artifact environment
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-export const useFirestore = (user) => {
-  const [quizzes, setQuizzes] = useState({});
-
-  // Helper to get user-specific data path
-  const getUserDataPath = (collectionName) => {
-    const userId = user?.uid || 'anonymous';
-    return collection(db, 'artifacts', appId, 'users', userId, collectionName);
-  };
-
-  // Automatic 7-day cleanup
-  const cleanupOldAttempts = useCallback(async () => {
-    if (!user || !db) return;
-
-    try {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-      const attemptsRef = getUserDataPath('examAttempts');
-      const oldAttemptsQuery = query(
-        attemptsRef,
-        where('timestamp', '<', sevenDaysAgo)
-      );
-
-      const snapshot = await getDocs(oldAttemptsQuery);
-      
-      if (snapshot.empty) {
-        console.log('✅ No old attempts to clean up');
-        return;
-      }
-
-      console.log(`🧹 Found ${snapshot.size} attempts older than 7 days, deleting...`);
-
-      const deletePromises = snapshot.docs.map(docSnapshot => 
-        deleteDoc(doc(db, docSnapshot.ref.path))
-      );
-
-      await Promise.all(deletePromises);
-      console.log(`✅ Deleted ${snapshot.size} old exam attempts`);
-    } catch (error) {
-      console.error('❌ Error cleaning up old attempts:', error);
-    }
-  }, [user]);
-
-  // Listen to exam attempts in real-time
-  useEffect(() => {
-    if (!user || !db) return;
-
-    const q = query(
-      getUserDataPath('examAttempts'), 
-      orderBy('timestamp', 'desc')
-    );
+service cloud.firestore {
+  match /databases/{database}/documents {
     
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const attemptsByExam = {};
+    // ============================================================================
+    // HELPER FUNCTIONS
+    // ============================================================================
+    
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Check if the authenticated user matches the userId in the path
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Validate exam attempt data structure
+    function isValidExamAttempt() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['examName', 'score', 'totalQuestions', 'timeSpent', 'percentage', 'passed', 'userId', 'timestamp'])
+        && data.examName is string
+        && data.score is number
+        && data.totalQuestions is number
+        && data.timeSpent is number
+        && data.percentage is number
+        && data.passed is bool
+        && data.userId == request.auth.uid
+        && data.questions is list
+        && data.userAnswers is map;
+    }
+    
+    // Validate paused exam data structure
+    function isValidPausedExam() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['examName', 'currentQuestion', 'answers', 'timeLeft', 'questions', 'examStartTime', 'userId', 'pausedAt', 'totalQuestions', 'answeredCount'])
+        && data.examName is string
+        && data.currentQuestion is number
+        && data.answers is map
+        && data.timeLeft is number
+        && data.questions is list
+        && data.examStartTime is number
+        && data.userId == request.auth.uid
+        && data.pausedAt is timestamp
+        && data.totalQuestions is number
+        && data.answeredCount is number;
+    }
+    
+    // ============================================================================
+    // ARTIFACTS COLLECTION - APP-SPECIFIC DATA
+    // ============================================================================
+    
+    match /artifacts/{appId}/users/{userId} {
       
-      snapshot.forEach(doc => {
-        const attempt = doc.data();
-        const examName = attempt.examName;
+      // ========================================================================
+      // EXAM ATTEMPTS COLLECTION (Completed Exams)
+      // ========================================================================
+      
+      match /examAttempts/{attemptId} {
         
-        if (!attemptsByExam[examName]) {
-          attemptsByExam[examName] = [];
-        }
+        // Allow READ if:
+        // - User is authenticated AND
+        // - User is the owner of the data
+        allow read: if isOwner(userId);
         
-        attemptsByExam[examName].push({ 
-          ...attempt, 
-          id: doc.id,
-          hasReviewData: !!(attempt.questions && attempt.userAnswers)
-        });
-      });
+        // Allow CREATE if:
+        // - User is authenticated AND
+        // - User is the owner AND
+        // - Data structure is valid
+        allow create: if isOwner(userId) && isValidExamAttempt();
+        
+        // Allow UPDATE if:
+        // - User is authenticated AND
+        // - User is the owner AND
+        // - Data structure remains valid
+        allow update: if isOwner(userId) && isValidExamAttempt();
+        
+        // Allow DELETE if:
+        // - User is authenticated AND
+        // - User is the owner
+        allow delete: if isOwner(userId);
+      }
       
-      setQuizzes(attemptsByExam);
-    }, (error) => {
-      console.error('❌ Error fetching quiz attempts:', error);
-    });
-
-    // Run cleanup on mount
-    cleanupOldAttempts();
-
-    return () => unsubscribe();
-  }, [user, cleanupOldAttempts]);
-
-  // Add quiz attempt with COMPLETE data for review
-  const addQuizAttempt = useCallback(async (examName, score, totalQuestions, timeSpent, questions, userAnswers) => {
-    if (!user || !db) {
-      console.error('❌ Cannot save: User not authenticated or DB unavailable');
-      return;
-    }
-
-    try {
-      const percentage = Math.round((score / totalQuestions) * 100);
-      const passMark = EXAM_CONFIGS[examName]?.passMark || 70;
+      // ========================================================================
+      // PAUSED EXAMS COLLECTION (Paused/In-Progress Exams) - NEW!
+      // ========================================================================
       
-      const attemptData = {
-        examName,
-        score,
-        totalQuestions,
-        timeSpent,
-        percentage,
-        passed: percentage >= passMark,
-        userId: user.uid,
-        timestamp: serverTimestamp(),
-        questions: questions || [],
-        userAnswers: userAnswers || {}
-      };
-      
-      await addDoc(getUserDataPath('examAttempts'), attemptData);
-      
-      console.log('✅ Quiz attempt saved with full review data');
-    } catch (error) {
-      console.error('❌ Error saving exam attempt:', error);
-      throw error;
+      match /pausedExams/{examName} {
+        
+        // Allow READ if:
+        // - User is authenticated AND
+        // - User is the owner of the data
+        allow read: if isOwner(userId);
+        
+        // Allow CREATE if:
+        // - User is authenticated AND
+        // - User is the owner AND
+        // - Data structure is valid
+        allow create: if isOwner(userId) && isValidPausedExam();
+        
+        // Allow UPDATE if:
+        // - User is authenticated AND
+        // - User is the owner AND
+        // - Data structure remains valid
+        // - userId cannot be changed (security)
+        allow update: if isOwner(userId) 
+          && isValidPausedExam()
+          && request.resource.data.userId == resource.data.userId;
+        
+        // Allow DELETE if:
+        // - User is authenticated AND
+        // - User is the owner
+        allow delete: if isOwner(userId);
+      }
     }
-  }, [user]);
-
-  // Delete individual exam attempt
-  const deleteAttempt = useCallback(async (attemptId) => {
-    if (!user || !db) {
-      console.error('❌ Cannot delete: User not authenticated or DB unavailable');
-      return;
+    
+    // ============================================================================
+    // DEFAULT DENY ALL OTHER PATHS
+    // ============================================================================
+    
+    match /{document=**} {
+      allow read, write: if false;
     }
-
-    if (!attemptId) {
-      console.error('❌ Cannot delete: No attempt ID provided');
-      return;
-    }
-
-    try {
-      const userId = user.uid;
-      const attemptRef = doc(db, 'artifacts', appId, 'users', userId, 'examAttempts', attemptId);
-      
-      await deleteDoc(attemptRef);
-      console.log('✅ Exam attempt deleted successfully');
-    } catch (error) {
-      console.error('❌ Error deleting exam attempt:', error);
-      throw error;
-    }
-  }, [user]);
-
-  return { 
-    quizzes, 
-    addQuizAttempt,
-    deleteAttempt
-  };
-};
+  }
+}

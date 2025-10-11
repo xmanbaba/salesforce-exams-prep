@@ -1,24 +1,36 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Pause } from 'lucide-react';
 import { EXAM_CONFIGS } from '../config/examConfig';
 import { Button, Card } from './UIComponents';
 
 export const Quiz = ({ 
   questions, 
   answers, 
+  currentQuestion: initialQuestion,
+  onCurrentQuestionChange,
+  initialTimeLeft,
   onAnswerChange, 
   onSubmitQuiz, 
+  onPauseExam,
   onBack, 
-  examName 
+  examName,
+  isResuming
 }) => {
-  const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(EXAM_CONFIGS[examName].timeLimit * 60);
+  const [currentQuestion, setCurrentQuestion] = useState(initialQuestion || 0);
+  const [timeLeft, setTimeLeft] = useState(initialTimeLeft || EXAM_CONFIGS[examName].timeLimit * 60);
   const [showConfirm, setShowConfirm] = useState(false);
   const [unansweredQuestions, setUnansweredQuestions] = useState([]);
-  const [isSubmitting, setIsSubmitting] = useState(false); // NEW: Prevent multiple submissions
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   const question = questions[currentQuestion];
   const isLastQuestion = currentQuestion === questions.length - 1;
+
+  // Update parent component when current question changes
+  useEffect(() => {
+    if (onCurrentQuestionChange) {
+      onCurrentQuestionChange(currentQuestion);
+    }
+  }, [currentQuestion, onCurrentQuestionChange]);
 
   // Timer effect
   useEffect(() => {
@@ -68,7 +80,6 @@ export const Quiz = ({
   };
 
   const handleSubmit = () => {
-    // Check for unanswered questions
     const unanswered = [];
     for (let i = 0; i < questions.length; i++) {
       if (!answers[i]) {
@@ -79,7 +90,6 @@ export const Quiz = ({
     setShowConfirm(true);
   };
 
-  // NEW: Separate function for actual submission with debouncing
   const handleFinalSubmit = async () => {
     if (isSubmitting) {
       console.log('⚠️ Submit already in progress, ignoring duplicate click');
@@ -96,7 +106,12 @@ export const Quiz = ({
       console.error('❌ Error submitting quiz:', error);
       setIsSubmitting(false);
     }
-    // Note: isSubmitting stays true to prevent re-submission after navigation
+  };
+
+  // Manual Pause Handler
+  const handleManualPause = () => {
+    console.log('⏸️ Manual pause button clicked');
+    onPauseExam(currentQuestion, answers, timeLeft);
   };
 
   const answeredCount = Object.keys(answers).length;
@@ -118,6 +133,15 @@ export const Quiz = ({
 
   return (
     <div className="max-w-4xl mx-auto">
+      {/* Resumed Banner */}
+      {isResuming && (
+        <div className="mb-4 p-3 bg-green-50 border-l-4 border-green-500 rounded-lg">
+          <p className="text-green-800 font-semibold">
+            📂 Exam Resumed - Continue where you left off!
+          </p>
+        </div>
+      )}
+
       {/* Header with timer and progress */}
       <Card className="mb-6">
         <div className="flex justify-between items-center mb-4">
@@ -239,14 +263,25 @@ export const Quiz = ({
       {/* Navigation */}
       <Card>
         <div className="flex justify-between items-center">
-          <Button
-            onClick={onBack}
-            color="bg-gray-400 hover:bg-gray-500"
-            icon={ArrowLeft}
-            disabled={isSubmitting}
-          >
-            Exit Exam
-          </Button>
+          <div className="flex space-x-3">
+            <Button
+              onClick={onBack}
+              color="bg-gray-400 hover:bg-gray-500"
+              icon={ArrowLeft}
+              disabled={isSubmitting}
+            >
+              Exit Exam
+            </Button>
+
+            <Button
+              onClick={handleManualPause}
+              color="bg-orange-500 hover:bg-orange-600"
+              icon={Pause}
+              disabled={isSubmitting}
+            >
+              Pause & Save
+            </Button>
+          </div>
 
           <div className="flex space-x-3">
             <Button
@@ -302,7 +337,6 @@ export const Quiz = ({
                   </div>
                 </div>
                 
-                {/* Clickable question numbers */}
                 <div className="flex flex-wrap gap-2 mt-3">
                   {unansweredQuestions.slice(0, 15).map(qNum => (
                     <button
