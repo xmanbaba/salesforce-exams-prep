@@ -19,7 +19,8 @@ function App() {
   // Auth and data hooks
   const { user, isAuthReady, signInWithGoogle, signInWithEmailPassword,
     createAccount, handleSignOut } = useAuth();
-  const { quizzes, addQuizAttempt, deleteAttempt } = useFirestore(user);
+  const { quizzes, pausedExams, addQuizAttempt, deleteAttempt, 
+    savePausedExam, loadPausedExam, deletePausedExam } = useFirestore(user);
 
   // Application state
   const [exam, setExam] = useState(null);
@@ -32,7 +33,12 @@ function App() {
   const [error, setError] = useState(null);
   const [reviewMode, setReviewMode] = useState(null);
   
-  // NEW: Track if quiz has been submitted to prevent duplicates
+  // NEW: Pause/Resume state
+  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(null);
+  const [isResuming, setIsResuming] = useState(false);
+  
+  // Track if quiz has been submitted to prevent duplicates
   const hasSubmittedRef = useRef(false);
 
   // Handle starting a quiz (regular or retake)
@@ -44,11 +50,62 @@ function App() {
     setQuestions(finalQuestions);
     setAnswers({});
     setScore(0);
+    setCurrentQuestion(0);
     setExamStartTime(Date.now());
+    setTimeLeft(EXAM_CONFIGS[examName].timeLimit * 60); // Set initial time
     setCurrentPage('quiz');
     setReviewMode(null);
-    hasSubmittedRef.current = false; // Reset submission flag
+    setIsResuming(false);
+    hasSubmittedRef.current = false;
   }, []);
+
+  // NEW: Handle resuming a paused exam
+  const handleResumeExam = useCallback(async (pausedExam) => {
+    try {
+      setIsLoading(true);
+      console.log(`📂 Resuming exam: ${pausedExam.examName}`);
+
+      setExam(pausedExam.examName);
+      setQuestions(pausedExam.questions);
+      setAnswers(pausedExam.answers);
+      setCurrentQuestion(pausedExam.currentQuestion);
+      setTimeLeft(pausedExam.timeLeft);
+      setExamStartTime(pausedExam.examStartTime);
+      setIsResuming(true);
+      setCurrentPage('quiz');
+      setReviewMode(null);
+      hasSubmittedRef.current = false;
+
+      console.log(`✅ Resumed at question ${pausedExam.currentQuestion + 1} with ${pausedExam.timeLeft}s remaining`);
+    } catch (error) {
+      console.error('❌ Error resuming exam:', error);
+      setError('Failed to resume exam. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // NEW: Handle pausing exam
+  const handlePauseExam = useCallback(async (currentQ, currentAnswers, currentTimeLeft) => {
+    try {
+      console.log(`⏸️ Pausing exam: ${exam} at question ${currentQ + 1}`);
+      
+      await savePausedExam(
+        exam,
+        currentQ,
+        currentAnswers,
+        currentTimeLeft,
+        questions,
+        examStartTime
+      );
+
+      alert('✅ Exam paused successfully! You can resume it from the dashboard.');
+      setCurrentPage('selection');
+    } catch (error) {
+      console.error('❌ Error pausing exam:', error);
+      alert('Failed to pause exam. Please try again.');
+    }
+  }, [exam, questions, examStartTime, savePausedExam]);
 
   // Handle generating questions from AI
   const handleGenerateQuestions = useCallback(async (examName, isRetake = false) => {
@@ -105,7 +162,6 @@ function App() {
 
   // Handle quiz submission - FIXED TO PREVENT DUPLICATES
   const handleSubmitQuiz = useCallback(async () => {
-    // Prevent duplicate submissions
     if (hasSubmittedRef.current) {
       console.log('⚠️ Quiz already submitted, ignoring duplicate submission');
       return;
@@ -118,7 +174,6 @@ function App() {
       const userAnswer = answers[index];
       const correctAnswer = q.answer;
       
-      // Handle multiple-select questions (comma-separated answers)
       if (q.questionType === 'multiple-select') {
         const userAnswers = (userAnswer || '').split(',').filter(Boolean).sort().join(',');
         const correctAnswers = correctAnswer.split(',').filter(Boolean).sort().join(',');
@@ -126,7 +181,6 @@ function App() {
           return acc + 1;
         }
       } else {
-        // Single answer questions
         if (userAnswer === correctAnswer) {
           return acc + 1;
         }
@@ -140,6 +194,14 @@ function App() {
     if (user && addQuizAttempt) {
       try {
         await addQuizAttempt(exam, finalScore, questions.length, timeSpent, questions, answers);
+        
+        // Delete paused exam if it exists (since it's now completed)
+        try {
+          await deletePausedExam(exam);
+        } catch (e) {
+          // Ignore if no paused exam exists
+        }
+        
         console.log('✅ Quiz results saved successfully');
       } catch (error) {
         console.error('❌ Failed to save quiz results:', error);
@@ -147,7 +209,7 @@ function App() {
     }
 
     setCurrentPage('results');
-  }, [answers, exam, questions, addQuizAttempt, user, examStartTime]);
+  }, [answers, exam, questions, addQuizAttempt, deletePausedExam, user, examStartTime]);
 
   // Handle restart/retake quiz
   const handleRestartQuiz = useCallback(async () => {
@@ -180,7 +242,7 @@ function App() {
   const handleBackToDashboard = useCallback(() => {
     setReviewMode(null);
     setCurrentPage('selection');
-    hasSubmittedRef.current = false; // Reset for next quiz
+    hasSubmittedRef.current = false;
   }, []);
 
   // Render pages
@@ -210,12 +272,15 @@ function App() {
           <ExamSelection
             onStartQuiz={handleStartQuiz}
             quizzes={quizzes}
+            pausedExams={pausedExams}
             isLoading={isLoading}
             error={error}
             generateQuestions={handleGenerateQuestions}
             onNewQuiz={handleNewQuiz}
             onReviewPastExam={handleReviewPastExam}
             onDeleteAttempt={deleteAttempt}
+            onResumeExam={handleResumeExam}
+            onDeletePausedExam={deletePausedExam}
           />
         );
 
@@ -224,10 +289,15 @@ function App() {
           <Quiz
             questions={questions}
             answers={answers}
+            currentQuestion={currentQuestion}
+            onCurrentQuestionChange={setCurrentQuestion}
+            initialTimeLeft={timeLeft}
             onAnswerChange={handleAnswerChange}
             onSubmitQuiz={handleSubmitQuiz}
+            onPauseExam={handlePauseExam}
             onBack={() => setCurrentPage('selection')}
             examName={exam}
+            isResuming={isResuming}
           />
         );
 

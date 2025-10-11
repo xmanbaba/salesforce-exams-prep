@@ -1,19 +1,22 @@
-import { Loader2, Zap, Plus, CheckCircle, RefreshCw, Eye, Trash2 } from 'lucide-react';
+import { Loader2, Zap, Plus, CheckCircle, RefreshCw, Eye, Trash2, Play, Pause } from 'lucide-react';
 import { EXAM_CONFIGS } from '../config/examConfig';
 import { Button, Card } from './UIComponents';
 
 export const ExamSelection = ({ 
   onStartQuiz, 
   quizzes, 
+  pausedExams = [],
   isLoading, 
   error, 
   generateQuestions,
   onNewQuiz,
   onReviewPastExam,
-  onDeleteAttempt
+  onDeleteAttempt,
+  onResumeExam,
+  onDeletePausedExam
 }) => {
   const handleDelete = async (examName, attemptId, e) => {
-    e.stopPropagation(); // Prevent triggering review when clicking delete
+    e.stopPropagation();
     
     if (!confirm('Are you sure you want to delete this exam attempt? This action cannot be undone.')) {
       return;
@@ -25,6 +28,22 @@ export const ExamSelection = ({
     } catch (error) {
       console.error('❌ Failed to delete exam attempt:', error);
       alert('Failed to delete exam attempt. Please try again.');
+    }
+  };
+
+  const handleDeletePaused = async (examName, e) => {
+    e.stopPropagation();
+    
+    if (!confirm('⏸️ Delete this paused exam?\n\nYou will lose all progress on this exam.')) {
+      return;
+    }
+
+    try {
+      await onDeletePausedExam(examName);
+      console.log('✅ Paused exam deleted successfully');
+    } catch (error) {
+      console.error('❌ Failed to delete paused exam:', error);
+      alert('Failed to delete paused exam. Please try again.');
     }
   };
 
@@ -50,6 +69,81 @@ export const ExamSelection = ({
         </div>
       )}
 
+      {/* Paused Exams Section */}
+      {pausedExams.length > 0 && (
+        <div className="mb-10 p-6 bg-gradient-to-r from-orange-50 to-yellow-50 border-2 border-orange-300 rounded-xl">
+          <div className="flex items-center gap-3 mb-4">
+            <Pause className="text-orange-600" size={28} />
+            <h3 className="text-2xl font-bold text-orange-900">⏸️ Paused Exams</h3>
+          </div>
+          <p className="text-sm text-orange-700 mb-4">
+            You have {pausedExams.length} paused exam{pausedExams.length > 1 ? 's' : ''}. Click "Resume" to continue where you left off.
+          </p>
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {pausedExams.map((paused) => (
+              <div
+                key={paused.examName}
+                className="p-4 bg-white border-2 border-orange-200 rounded-lg hover:border-orange-400 hover:shadow-lg transition-all cursor-pointer relative group"
+                onClick={() => onResumeExam(paused)}
+              >
+                {/* Delete button */}
+                <button
+                  onClick={(e) => handleDeletePaused(paused.examName, e)}
+                  className="absolute top-2 right-2 p-1.5 bg-red-100 hover:bg-red-200 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Delete paused exam"
+                >
+                  <Trash2 size={14} className="text-red-600" />
+                </button>
+
+                <div className="mb-3">
+                  <h4 className="font-bold text-gray-800 text-sm leading-tight pr-8">
+                    {paused.examName}
+                  </h4>
+                  <span className="inline-block mt-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs font-semibold rounded">
+                    ⏸️ PAUSED
+                  </span>
+                </div>
+
+                <div className="space-y-1 text-xs text-gray-600 mb-3">
+                  <div className="flex justify-between">
+                    <span>Progress:</span>
+                    <span className="font-semibold">
+                      Question {paused.currentQuestion + 1}/{paused.totalQuestions}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Answered:</span>
+                    <span className="font-semibold">
+                      {paused.answeredCount}/{paused.totalQuestions}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Time Left:</span>
+                    <span className="font-semibold">
+                      {Math.floor(paused.timeLeft / 60)}:{(paused.timeLeft % 60).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+                </div>
+
+                <Button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onResumeExam(paused);
+                  }}
+                  className="w-full"
+                  color="bg-orange-600 hover:bg-orange-700"
+                  icon={Play}
+                >
+                  Resume Exam
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Available Exams */}
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
         {Object.entries(EXAM_CONFIGS).map(([examName, config]) => (
           <div
@@ -108,6 +202,7 @@ export const ExamSelection = ({
         ))}
       </div>
 
+      {/* Completed Exams History */}
       <div className="border-t pt-8">
         <h3 className="text-2xl font-bold text-gray-700 mb-6">Your Recent Exam History</h3>
         
@@ -116,8 +211,8 @@ export const ExamSelection = ({
             <div className="text-gray-400 mb-4">
               <CheckCircle size={48} className="mx-auto" />
             </div>
-            <p className="text-gray-500 text-lg">No exam attempts yet</p>
-            <p className="text-gray-400 text-sm">Start an exam above to see your progress here</p>
+            <p className="text-gray-500 text-lg">No completed exams yet</p>
+            <p className="text-gray-400 text-sm">Start an exam above to see your results here</p>
           </div>
         ) : (
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -141,7 +236,7 @@ export const ExamSelection = ({
                         onClick={() => hasReviewData && onReviewPastExam && onReviewPastExam(attempt)}
                         title={hasReviewData ? 'Click to review this exam attempt' : 'Review data not available'}
                       >
-                        {/* Delete button - appears on hover */}
+                        {/* Delete button */}
                         <button
                           onClick={(e) => handleDelete(examName, attempt.id, e)}
                           className="absolute top-2 right-2 p-1.5 bg-red-100 hover:bg-red-200 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
